@@ -332,8 +332,13 @@ def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int
     else:
         raise ValueError(f'Unsupported DXT format: {format_id}')
     
+    
     # Convert bytes to numpy array
     rgba_array = np.frombuffer(rgba_bytes, dtype=np.uint8).reshape((height, width, 4))
+    
+    rgba_array = rgba_array.copy()
+    rgba_array[:, :, [0, 2]] = rgba_array[:, :, [2, 0]]
+       
     
     # Convert to PIL Image (RGBA)
     img = Image.fromarray(rgba_array, mode='RGBA')
