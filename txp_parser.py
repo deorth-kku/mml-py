@@ -332,20 +332,15 @@ def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int
     else:
         raise ValueError(f'Unsupported DXT format: {format_id}')
     
-    
     # Convert bytes to numpy array
     rgba_array = np.frombuffer(rgba_bytes, dtype=np.uint8).reshape((height, width, 4))
     
+    # Swap B and R channels (BGR -> RGB)
     rgba_array = rgba_array.copy()
     rgba_array[:, :, [0, 2]] = rgba_array[:, :, [2, 0]]
-       
     
-    # Convert to PIL Image (RGBA)
-    img = Image.fromarray(rgba_array, mode='RGBA')
-    
-    # Rotate 180 degrees to fix upside-down image
-    #img = img.rotate(180, expand=False)
-    #img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    # Convert to PIL Image (RGBA) - avoid deprecated 'mode' parameter
+    img = Image.fromarray(rgba_array)
     
     return img
 
@@ -894,18 +889,52 @@ def export_base_mips(path, out_dir_base):
     return blocks, exported
 
 
-def export_sprites_to_png(bin_path: str, output_dir: str):
-    """Parse sprites from .bin file and export each sprite as PNG."""
+def _load_bin_data(file_path: str) -> bytes:
+    """
+    Load binary data from either .bin file or FARC archive.
+    Automatically detects file type by header.
+    
+    Returns: decompressed BIN data as bytes
+    """
+    with open(file_path, 'rb') as f:
+        header = f.read(4).decode('ascii', errors='ignore')
+    
+    # Check if it's a FARC archive
+    if header in ('FARC', 'FArC', 'FArc'):
+        print(f"Detected {header} archive format")
+        with open(file_path, 'rb') as f:
+            archive = FarcArchive()
+            archive.parse(f)
+            
+            if not archive.entries:
+                raise ValueError("No entries found in FARC archive")
+            
+            entry = archive.entries[0]
+            bin_data = archive.extract_entry_data(f, entry)
+            print(f"Extracted {entry.name} from FARC ({len(bin_data)} bytes)")
+            return bin_data
+    else:
+        # Treat as raw BIN file
+        print("Detected raw BIN format")
+        with open(file_path, 'rb') as f:
+            return f.read()
+
+
+def export_sprites_to_png(file_path: str, output_dir: str):
+    """Parse sprites from .bin or .farc file and export each sprite as PNG."""
     os.makedirs(output_dir, exist_ok=True)
     
-    with open(bin_path, 'rb') as f:
-        data = f.read()
+    # Load BIN data (auto-detect FARC or raw BIN)
+    bin_data = _load_bin_data(file_path)
+    
+    if not bin_data:
+        raise ValueError("Failed to read file data")
     
     # Try to parse SpriteSet
     sprite_set = None
     for little in (True, False):
         try:
-            fobj = io.BytesIO(data)
+            fobj = io.BytesIO(bin_data)
             r = Reader(fobj)
             r.set_endian(little)
             ss = SpriteSet()
@@ -917,7 +946,7 @@ def export_sprites_to_png(bin_path: str, output_dir: str):
             pass
     
     if not sprite_set or not sprite_set.sprites:
-        print(f"Failed to parse sprites from {bin_path}")
+        print(f"Failed to parse sprites from {file_path}")
         return
     
     print(f"Found {len(sprite_set.sprites)} sprites and {len(sprite_set.texture_set.textures)} textures")
@@ -966,43 +995,25 @@ def export_sprites_to_png(bin_path: str, output_dir: str):
     print(f"\nExported {len(exported)} sprites to {output_dir}")
 
 
-def export_sprites_from_farc(farc_path: str, output_dir: str):
+def export_textures_to_png(file_path: str, output_dir: str, flip: bool = False):
     """
-    Extract sprites directly from FARC archive and export as PNG files.
-    No intermediate .bin file is created.
-    
-    This function:
-    1. Opens FARC file
-    2. Decompresses BIN data in memory
-    3. Parses sprites from BIN data
-    4. Exports all sprites as PNG files
+    Parse textures from .bin or .farc file and export each texture as PNG.
+    Automatically detects file type by header.
     
     Args:
-        farc_path: Path to .farc/.FArC/.FArc file
+        file_path: Path to .bin or .farc/.FArC/.FArc file
         output_dir: Output directory for PNG files
+        flip: Whether to flip texture vertically (default: False)
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Step 1: Extract BIN data from FARC (in memory, no file I/O)
-    bin_data = None
-    
-    with open(farc_path, 'rb') as f:
-        # Parse FARC archive
-        archive = FarcArchive()
-        archive.parse(f)
-        
-        if not archive.entries:
-            raise ValueError("No entries found in FARC archive")
-        
-        # Extract first entry as BIN data
-        entry = archive.entries[0]
-        bin_data = archive.extract_entry_data(f, entry)
-        print(f"Extracted {entry.name} from FARC ({len(bin_data)} bytes)")
+    # Load BIN data (auto-detect FARC or raw BIN)
+    bin_data = _load_bin_data(file_path)
     
     if not bin_data:
-        raise ValueError("No valid BIN file found in FARC archive")
+        raise ValueError("Failed to read file data")
     
-    # Step 2: Parse sprites from BIN data (in memory)
+    # Parse textures from BIN data
     fobj = io.BytesIO(bin_data)
     
     sprite_set = None
@@ -1013,57 +1024,40 @@ def export_sprites_from_farc(farc_path: str, output_dir: str):
             r.set_endian(little)
             ss = SpriteSet()
             ss.read(r)
-            if ss.sprites and ss.texture_set:
+            if ss.texture_set:
                 sprite_set = ss
                 break
         except:
             pass
     
-    if not sprite_set or not sprite_set.sprites:
-        raise ValueError("Failed to parse sprites from FARC data")
+    if not sprite_set or not sprite_set.texture_set:
+        raise ValueError("Failed to parse textures from file data")
     
-    print(f"Found {len(sprite_set.sprites)} sprites and {len(sprite_set.texture_set.textures)} textures")
+    texture_set = sprite_set.texture_set
+    print(f"Found {len(texture_set.textures)} textures")
     
-    # Step 3: Decode textures
-    texture_images = []
-    for idx, tex in enumerate(sprite_set.texture_set.textures):
+    # Export each texture
+    exported = []
+    for idx, tex in enumerate(texture_set.textures):
         try:
             img = tex.get_base_texture_image()
-            if img:
-                texture_images.append(img)
-                tex_name = tex.name or f"texture_{idx}"
-                print(f"  Texture {idx} ({tex_name}): {img.size}")
-            else:
-                texture_images.append(None)
-        except Exception as e:
-            print(f"  Failed to decode texture {idx}: {e}")
-            texture_images.append(None)
-    
-    # Step 4: Export sprites
-    exported = []
-    for sprite in sprite_set.sprites:
-        sprite_name = sprite.name or f"sprite_{sprite.texture_index}_{len(exported)}"
-        tex_idx = sprite.texture_index
-        
-        if tex_idx >= len(texture_images) or texture_images[tex_idx] is None:
-            print(f"  Skipping {sprite_name}: texture {tex_idx} not available")
-            continue
-        
-        try:
-            sprite_img = sprite.crop_from_texture(texture_images[tex_idx])
-            if sprite_img is None:
-                print(f"  Skipping {sprite_name}: failed to crop")
+            if not img:
+                print(f"  Skipping texture {idx}: no base mip available")
                 continue
             
-            out_path = os.path.join(output_dir, f"{sprite_name}.png")
-            sprite_img.save(out_path)
+            # Flip if requested
+            if flip:
+                img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            
+            tex_name = tex.name or f"texture_{idx}"
+            out_path = os.path.join(output_dir, f"{tex_name}.png")
+            img.save(out_path)
             exported.append(out_path)
-            texture_name = sprite_set.texture_set.textures[tex_idx].name or f"texture_{tex_idx}"
-            print(f"  Exported: {sprite_name} ({sprite_img.size}) x={int(sprite.x)},y={int(sprite.y)},w={int(sprite.width)},h={int(sprite.height)} ({texture_name})")
+            print(f"  Exported: {tex_name} ({img.size})")
         except Exception as e:
-            print(f"  Failed to export {sprite_name}: {e}")
+            print(f"  Failed to export texture {idx}: {e}")
     
-    print(f"\nExported {len(exported)} sprites to {output_dir}")
+    print(f"\nExported {len(exported)} textures to {output_dir}")
 
 
 def main():
@@ -1080,13 +1074,14 @@ def main():
     p_sum.add_argument('path')
     p_sum.add_argument('--export-base-mip', action='store_true', help='export only base mip blobs')
     
-    p_export = sub.add_parser('export-sprites', help='extract and save all sprites as PNG files')
-    p_export.add_argument('path', help='path to .bin file with sprites')
+    p_export = sub.add_parser('export-sprites', help='extract and save all sprites as PNG files (auto-detects .bin or .farc)')
+    p_export.add_argument('path', help='path to .bin or .farc/.FArC/.FArc file')
     p_export.add_argument('-o', '--output', help='output directory (default: ./sprites_export)')
     
-    p_export_farc = sub.add_parser('export-sprites-from-farc', help='extract sprites directly from FARC archive as PNG files')
-    p_export_farc.add_argument('path', help='path to .farc/.FArC/.FArc file')
-    p_export_farc.add_argument('-o', '--output', help='output directory (default: ./sprites_export)')
+    p_export_tex = sub.add_parser('export-textures', help='extract and save all textures as PNG files (auto-detects .bin or .farc)')
+    p_export_tex.add_argument('path', help='path to .bin or .farc/.FArC/.FArc file')
+    p_export_tex.add_argument('-o', '--output', help='output directory (default: ./textures_export)')
+    p_export_tex.add_argument('--flip', action='store_true', help='flip texture vertically')
     
     p_farc = sub.add_parser('extract-farc', help='extract files from FARC archive')
     p_farc.add_argument('path', help='path to .farc file')
@@ -1103,8 +1098,8 @@ def main():
         parse_spr(args.path)
     elif args.command == 'export-sprites':
         export_sprites_to_png(args.path, args.output or 'sprites_export')
-    elif args.command == 'export-sprites-from-farc':
-        export_sprites_from_farc(args.path, args.output or 'sprites_export')
+    elif args.command == 'export-textures':
+        export_textures_to_png(args.path, args.output or 'textures_export', flip=args.flip)
     elif args.command == 'extract-farc':
         extract_farc(args.path, args.output or 'farc_extract')
     elif args.command == 'summary':

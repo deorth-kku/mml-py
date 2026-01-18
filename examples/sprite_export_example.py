@@ -12,7 +12,7 @@ import os
 # Add the tools directory to the path so we can import txp_parser
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
 
-from txp_parser import export_sprites_from_farc, export_sprites_to_png
+from txp_parser import export_sprites_to_png
 
 
 def example_1_farc_direct():
@@ -25,7 +25,7 @@ def example_1_farc_direct():
     output_dir = "output/sprites_from_farc"
     
     # This is the main function you'd use
-    export_sprites_from_farc(farc_path, output_dir)
+    export_sprites_to_png(farc_path, output_dir)
     
     print(f"\n✓ Sprites saved to {output_dir}\n")
 
@@ -69,7 +69,7 @@ def example_3_batch_farc():
         
         try:
             print(f"\nProcessing: {farc_path}")
-            export_sprites_from_farc(farc_path, output_dir)
+            export_sprites_to_png(farc_path, output_dir)
         except Exception as e:
             print(f"✗ Error processing {farc_path}: {e}")
     
