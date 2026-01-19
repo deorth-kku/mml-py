@@ -7,6 +7,8 @@ import io
 import numpy as np
 from PIL import Image
 from texture2ddecoder import decode_bc1, decode_bc3
+from collections.abc import Generator
+from functools import cached_property
 
 TXP_TEXSET_SIG = 0x03505854  # 'TXP' type 3
 TXP_TEXTURE_SIG_V4 = 0x04505854
@@ -348,7 +350,7 @@ def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int
 class Texture:
     def __init__(self):
         self.subtextures = []  # 2D flattened as [array_index][mip]
-        self.name = None
+        self.name:str = None
 
     def read(self, r: Reader):
         # Set base to current position (start of Texture)
@@ -397,7 +399,8 @@ class Texture:
                     paths.append(st.dump(out_dir, namep))
         return paths
     
-    def get_base_texture_image(self):
+    @cached_property
+    def image(self)->Image.Image:
         """Get the base (full resolution) texture as a PIL Image."""
         if (len(self.subtextures) > 0 and len(self.subtextures[0]) > 0 and 
             self.subtextures[0][0] is not None):
@@ -408,8 +411,12 @@ class Texture:
 
 class TextureSet:
     def __init__(self):
-        self.textures = []
+        self.textures:list[Texture] = []
         self.texture_names = {}  # idx -> name
+
+
+    def __len__(self):
+        return len(self.textures)
 
     def read(self, r: Reader, texture_names_offset=0):
         # When called by SpriteSet, base is already set to TextureSet start
@@ -505,8 +512,18 @@ class Sprite:
 
 class SpriteSet:
     def __init__(self):
-        self.sprites = []
-        self.texture_set = None
+        self.sprites:list[Sprite] = []
+        self.texture_set:TextureSet = None
+
+    def __iter__(self)->Generator[tuple[Sprite,Image.Image]]:
+        for sprite in self.sprites:
+            tex_idx = sprite.texture_index
+            if tex_idx >= len(self.texture_set) or self.texture_set.textures[tex_idx] is None:
+                raise ValueError(f"{sprite.name}: texture {tex_idx} not available")
+            sprite_img = sprite.crop_from_texture(self.texture_set.textures[tex_idx].image)
+            if sprite_img is None:
+                raise ValueError(f"{sprite.name}: failed to crop")
+            yield sprite,sprite_img
 
     def read(self, r: Reader):
         # SpriteSet is at file position 0, so base is 0
@@ -919,80 +936,37 @@ def _load_bin_data(file_path: str) -> bytes:
         with open(file_path, 'rb') as f:
             return f.read()
 
+def SpriteSet_from_file(filepath:str)->SpriteSet:
+    bin_data = _load_bin_data(filepath)
+    if not bin_data:
+        raise ValueError(f"Failed to read file data from file {filepath}")
+    ss = try_parse_sprites_from_bytes(bin_data)
+    if not ss:
+        raise ValueError(f"Failed to parse sprites from {filepath}")
+    return ss
+
 
 def export_sprites_to_png(file_path: str, output_dir: str):
     """Parse sprites from .bin or .farc file and export each sprite as PNG."""
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Load BIN data (auto-detect FARC or raw BIN)
-    bin_data = _load_bin_data(file_path)
-    
-    if not bin_data:
-        raise ValueError("Failed to read file data")
-    
-    # Try to parse SpriteSet
-    sprite_set = None
-    for little in (True, False):
-        try:
-            fobj = io.BytesIO(bin_data)
-            r = Reader(fobj)
-            r.set_endian(little)
-            ss = SpriteSet()
-            ss.read(r)
-            if ss.sprites and ss.texture_set:
-                sprite_set = ss
-                break
-        except:
-            pass
-    
-    if not sprite_set or not sprite_set.sprites:
-        print(f"Failed to parse sprites from {file_path}")
-        return
+
+    sprite_set = SpriteSet_from_file(filepath=file_path)
     
     print(f"Found {len(sprite_set.sprites)} sprites and {len(sprite_set.texture_set.textures)} textures")
     
-    # Decode base textures
-    texture_images = []
-    for idx, tex in enumerate(sprite_set.texture_set.textures):
-        try:
-            img = tex.get_base_texture_image()
-            if img:
-                texture_images.append(img)
-                tex_name = tex.name or f"texture_{idx}"
-                print(f"  Texture {idx} ({tex_name}): {img.size}")
-            else:
-                texture_images.append(None)
-        except Exception as e:
-            print(f"  Failed to decode texture {idx}: {e}")
-            texture_images.append(None)
-    
     # Export sprites
-    exported = []
-    for sprite in sprite_set.sprites:
-        sprite_name = sprite.name or f"sprite_{sprite.texture_index}_{len(exported)}"
+    exported = 0
+    for sprite,img in sprite_set:
+        sprite_name = sprite.name or f"sprite_{sprite.texture_index}_{exported}"
         tex_idx = sprite.texture_index
         
-        if tex_idx >= len(texture_images) or texture_images[tex_idx] is None:
-            print(f"  Skipping {sprite_name}: texture {tex_idx} not available")
-            continue
-        
-        try:
-            # Crop sprite from texture
-            sprite_img = sprite.crop_from_texture(texture_images[tex_idx])
-            if sprite_img is None:
-                print(f"  Skipping {sprite_name}: failed to crop")
-                continue
-            
-            # Save as PNG
-            out_path = os.path.join(output_dir, f"{sprite_name}.png")
-            sprite_img.save(out_path)
-            exported.append(out_path)
-            texture_name = sprite_set.texture_set.textures[tex_idx].name or f"texture_{tex_idx}"
-            print(f"  Exported: {sprite_name} ({sprite_img.size}) x={int(sprite.x)},y={int(sprite.y)},w={int(sprite.width)},h={int(sprite.height)} ({texture_name})")
-        except Exception as e:
-            print(f"  Failed to export {sprite_name}: {e}")
+        out_path = os.path.join(output_dir, f"{sprite_name}.png")
+        img.save(out_path)
+        exported+=1
+        texture_name = sprite_set.texture_set.textures[sprite.texture_index].name or f"texture_{tex_idx}"
+        print(f"  Exported: {sprite_name} ({img.size}) x={int(sprite.x)},y={int(sprite.y)},w={int(sprite.width)},h={int(sprite.height)} ({texture_name})")
     
-    print(f"\nExported {len(exported)} sprites to {output_dir}")
+    print(f"\nExported {exported} sprites to {output_dir}")
 
 
 def export_textures_to_png(file_path: str, output_dir: str, flip: bool = False):
@@ -1007,40 +981,14 @@ def export_textures_to_png(file_path: str, output_dir: str, flip: bool = False):
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load BIN data (auto-detect FARC or raw BIN)
-    bin_data = _load_bin_data(file_path)
-    
-    if not bin_data:
-        raise ValueError("Failed to read file data")
-    
-    # Parse textures from BIN data
-    fobj = io.BytesIO(bin_data)
-    
-    sprite_set = None
-    for little in (True, False):
-        try:
-            fobj.seek(0)
-            r = Reader(fobj)
-            r.set_endian(little)
-            ss = SpriteSet()
-            ss.read(r)
-            if ss.texture_set:
-                sprite_set = ss
-                break
-        except:
-            pass
-    
-    if not sprite_set or not sprite_set.texture_set:
-        raise ValueError("Failed to parse textures from file data")
-    
-    texture_set = sprite_set.texture_set
+    texture_set = SpriteSet_from_file(filepath=file_path).texture_set
     print(f"Found {len(texture_set.textures)} textures")
     
     # Export each texture
     exported = []
     for idx, tex in enumerate(texture_set.textures):
         try:
-            img = tex.get_base_texture_image()
+            img = tex.image
             if not img:
                 print(f"  Skipping texture {idx}: no base mip available")
                 continue
@@ -1107,73 +1055,22 @@ def main():
         out = {'file': args.path, 'txp_blocks': blocks, 'sprites': []}
         # if the file itself is a sprite set, parse sprites
         # Attempt to parse SpriteSet using both endiannesses and from root
-        def try_parse_sprites_file(path):
-            sprites = []
-            with open(path, 'rb') as f:
-                data = f.read()
-
-            # try parsing from the file root with both endian modes
-            for little in (True, False):
-                try:
-                    fobj = io.BytesIO(data)
-                    r = Reader(fobj)
-                    r.set_endian(little)
-                    ss = SpriteSet()
-                    ss.read(r)
-                    if ss.sprites:
-                        for i, s in enumerate(ss.sprites):
-                            sprites.append({
-                                'index': i,
-                                'name': s.name,
-                                'texture_index': s.texture_index,
-                                'x': s.x,
-                                'y': s.y,
-                                'width': s.width,
-                                'height': s.height,
-                            })
-                        return sprites
-                except Exception:
-                    pass
-
-            # if root parse failed, try parsing SpriteSet located at offsets near TXP blocks
-            blocks_offsets = [b['offset'] for b in blocks]
-            # common sprite table might be near start; also try offset 0 explicitly above
-            candidate_offsets = [0] + blocks_offsets
-            for off in sorted(set(candidate_offsets)):
-                for little in (True, False):
-                    try:
-                        fobj = io.BytesIO(data)
-                        r = Reader(fobj)
-                        r.set_endian(little)
-                        # set base to the candidate offset so ReadOffset uses BaseOffset+offset
-                        r.seek(off)
-                        r.push_base(off)
-                        ss = SpriteSet()
-                        ss.read(r)
-                        if ss.sprites:
-                            for i, s in enumerate(ss.sprites):
-                                sprites.append({
-                                    'index': i,
-                                    'name': s.name,
-                                    'texture_index': s.texture_index,
-                                    'x': s.x,
-                                    'y': s.y,
-                                    'width': s.width,
-                                    'height': s.height,
-                                })
-                            return sprites
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            r.pop_base()
-                        except Exception:
-                            pass
-
-            return sprites
-
         try:
-            sprites = try_parse_sprites_file(args.path)
+            with open(args.path, 'rb') as f:
+                data = f.read()
+            ss = try_parse_sprites_from_bytes(data, candidate_offsets=[b['offset'] for b in blocks])
+            sprites = []
+            if ss and ss.sprites:
+                for i, s in enumerate(ss.sprites):
+                    sprites.append({
+                        'index': i,
+                        'name': s.name,
+                        'texture_index': s.texture_index,
+                        'x': s.x,
+                        'y': s.y,
+                        'width': s.width,
+                        'height': s.height,
+                    })
             out['sprites'] = sprites
         except Exception:
             out['sprites'] = []
@@ -1189,6 +1086,41 @@ def main():
 
         print('Wrote summary to', json_path)
 
+
+
+# 新增：统一尝试使用大小端解析 SpriteSet 的辅助函数
+def try_parse_sprites_from_bytes(data: bytes, candidate_offsets=None) -> 'SpriteSet | None':
+    """
+    尝试从 bytes 中解析 SpriteSet。会尝试 little/big endian 两种模式。
+    如果提供 candidate_offsets，会按这些偏移（以及 0）尝试解析（用于文件中嵌入块的情况）。
+    返回第一个成功解析且包含 sprites 的 SpriteSet，否则返回 None。
+    """
+    if candidate_offsets is None:
+        candidate_offsets = [0]
+    else:
+        # 确保包含根偏移 0
+        candidate_offsets = [0] + list(candidate_offsets)
+
+    for off in sorted(set(candidate_offsets)):
+        for little in (True, False):
+            try:
+                fobj = io.BytesIO(data)
+                r = Reader(fobj)
+                r.set_endian(little)
+                r.seek(off)
+                r.push_base(off)
+                ss = SpriteSet()
+                ss.read(r)
+                if ss.sprites:
+                    return ss
+            except Exception:
+                pass
+            finally:
+                try:
+                    r.pop_base()
+                except Exception:
+                    pass
+    return None
 
 if __name__ == '__main__':
     main()
