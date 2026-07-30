@@ -354,6 +354,8 @@ def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int
         rgba_bytes = decode_bc1(dxt_data, width, height)
     elif format_id == 9:  # DXT5 = BC3 (with alpha channel)
         rgba_bytes = decode_bc3(dxt_data, width, height)
+    elif format_id == 2:  # RGBA8 uncompressed
+        rgba_bytes = dxt_data
     else:
         raise ValueError(f'Unsupported DXT format: {format_id}')
     
