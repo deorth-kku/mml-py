@@ -193,7 +193,7 @@ def serialize_spriteset(
     sprite_name_off_table_end = sprite_name_off_table_offset + sprite_name_off_table_size
 
     sprite_modes_offset = sprite_name_off_table_end
-    sprite_modes_size = len(sprite_modes) * 4
+    sprite_modes_size = len(sprite_modes) * 8  # 8 bytes per sprite
     sprite_modes_end = sprite_modes_offset + sprite_modes_size
 
     # String table starts after sprite modes
@@ -223,7 +223,7 @@ def serialize_spriteset(
     sprite_name_off_table_end = sprite_name_off_table_offset + sprite_name_off_table_size
 
     sprite_modes_offset = sprite_name_off_table_end
-    sprite_modes_size = len(sprite_modes) * 4
+    sprite_modes_size = len(sprite_modes) * 8  # 8 bytes per sprite: skip uint32 + resolution mode uint32
     sprite_modes_end = sprite_modes_offset + sprite_modes_size
 
     # String table starts after sprite modes
@@ -268,9 +268,9 @@ def serialize_spriteset(
     for off in sprite_name_offsets:
         buf += struct.pack('<I', off)
 
-    # Sprite modes table
+    # Sprite modes table (8 bytes per sprite: skip uint32 + resolution mode uint32)
     for mode in sprite_modes:
-        buf += struct.pack('<I', mode)
+        buf += struct.pack('<II', 0, mode)
 
     # String table
     for nb in tex_name_bytes + sprite_name_bytes:

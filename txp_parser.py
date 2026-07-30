@@ -16,6 +16,29 @@ TXP_TEXTURE_SIG_V5 = 0x05505854
 TXP_SUBTEXTURE_SIG = 0x02505854
 TXP_SPRITESET_SIG = 0x00000000  # SpriteSet signature (all zeros)
 
+# Resolution mode constants (based on GUI dropdown)
+RESOLUTION_MODES = {
+    0: 'QVGA',
+    1: 'VGA',
+    2: 'SVGA',
+    3: 'XGA',
+    4: 'Mode4',
+    5: 'Mode5',
+    6: 'UXGA',
+    7: 'WVGA',
+    8: 'Mode8',
+    9: 'WXGA',
+    10: 'Mode10',
+    11: 'WUXGA',
+    12: 'WQXGA',
+    13: 'HDTV720',
+    14: 'HDTV1080',
+    15: 'Mode15',
+    16: 'Mode16',
+    17: 'Mode17',
+    18: 'Custom',
+}
+
 
 class FarcEntry:
     """Represents a single entry in a FARC archive."""
@@ -481,6 +504,7 @@ class Sprite:
         self.width = 0.0
         self.height = 0.0
         self.name = None
+        self.resolution_mode = 0  # resolution mode (0=QVGA, 14=HDTV1080, etc.)
 
     def read(self, r: Reader):
         self.texture_index = r.read_uint32()
@@ -514,6 +538,7 @@ class SpriteSet:
     def __init__(self):
         self.sprites:list[Sprite] = []
         self.texture_set:TextureSet = None
+        self.sprite_modes: list[int] = []
 
     def __iter__(self)->Generator[tuple[Sprite,Image.Image]]:
         for sprite in self.sprites:
@@ -557,6 +582,22 @@ class SpriteSet:
                 self.sprites.append(s)
             r.seek(cur)
 
+        # Read sprite modes table (8 bytes per sprite: skip first uint32, read second uint32 as resolution mode)
+        self.sprite_modes = []
+        if sprite_modes_offset != 0:
+            cur = r.tell()
+            r.seek(r.base + sprite_modes_offset)
+            for _ in range(sprite_count):
+                _skip = r.read_uint32()  # skip first int32
+                mode = r.read_uint32()    # second int32 is the resolution mode
+                self.sprite_modes.append(mode)
+            r.seek(cur)
+        
+        # Assign resolution modes to sprites
+        for i, mode in enumerate(self.sprite_modes):
+            if i < len(self.sprites):
+                self.sprites[i].resolution_mode = mode
+
         # Read sprite name offsets (point to absolute file positions)
         if sprite_names_offset != 0:
             cur = r.tell()
@@ -574,6 +615,25 @@ class SpriteSet:
                     self.sprites[i].name = name
             
             r.seek(cur)
+
+    def dump(self, out_dir):
+        """Dump SpriteSet to directory."""
+        os.makedirs(out_dir, exist_ok=True)
+        paths = []
+        
+        # Dump textures
+        if self.texture_set:
+            paths += self.texture_set.dump_all(out_dir)
+        
+        # Dump sprites
+        for i, sprite in enumerate(self.sprites):
+            if sprite.image:
+                mode_name = RESOLUTION_MODES.get(sprite.resolution_mode, f'Mode{sprite.resolution_mode}')
+                path = os.path.join(out_dir, f"{sprite.name}_{mode_name}.png")
+                sprite.image.save(path)
+                paths.append(path)
+        
+        return paths
 
 
 def parse_txd(path):

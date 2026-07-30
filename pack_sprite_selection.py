@@ -48,6 +48,7 @@ def build_sprite_selection_farc(
     output_dir: str | os.PathLike[str] | None = None,
     *,
     atlas_info: AtlasInfo | None = None,
+    resolution_mode: int = 14,  # HDTV1080
 ) -> str:
     """Build a ``spr_sel_pv<pv>.farc`` archive from three PNG inputs.
 
@@ -58,6 +59,8 @@ def build_sprite_selection_farc(
         pv: PV number as string or int (3 or 4 digits, no leading zeros).
         output_dir: Output directory. Defaults to current directory.
         atlas_info: Pre-computed AtlasInfo (skips atlas build).
+        resolution_mode: Resolution mode (0=QVGA, 14=HDTV1080, etc.).
+                         Default is 0 (QVGA).
 
     Returns:
         Path to the generated .farc file.
@@ -111,7 +114,9 @@ def build_sprite_selection_farc(
     ]
 
     # --- Serialize BIN ---
-    bin_data = serialize_spriteset(sprites, textures)
+    # All sprites use the same resolution mode
+    sprite_modes = [resolution_mode, resolution_mode, resolution_mode]
+    bin_data = serialize_spriteset(sprites, textures, sprite_modes=sprite_modes)
 
     # --- Build FArC ---
     entry_name = f'spr_sel_pv{pv_str}.bin'
