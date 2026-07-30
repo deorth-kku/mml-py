@@ -7,6 +7,7 @@ payload for embedding in TXP SubTexture blocks.
 
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import shutil
@@ -58,20 +59,60 @@ class AtlasInfo(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Texconv subprocess helper
+# Texconv DLL (ctypes) helper
 # ---------------------------------------------------------------------------
 
-def _find_texconv() -> str:
-    """Locate texconv.exe on PATH or next to this module."""
-    for candidate in [
-        shutil.which("texconv.exe"),
-        str(Path(__file__).parent / "texconv" / "texconv.exe"),
-    ]:
+# Module-level DLL handle and COM state — initialized on first use
+_texconv_dll = None
+_texconv_initialized = False
+
+
+def _load_texconv_dll() -> tuple:
+    """Load texconv.dll and return (dll, init_result).
+    
+    Uses manual COM initialization to avoid the DLL's internal COM bug
+    that causes the second call to crash with access violation.
+    """
+    global _texconv_dll, _texconv_initialized
+    
+    if _texconv_dll is not None:
+        return _texconv_dll, _texconv_initialized
+    
+    # Locate DLL
+    dll_candidates = [
+        os.path.join(os.path.dirname(__file__), "texconv", "texconv.dll"),
+        shutil.which("texconv.dll") or "",
+    ]
+    for candidate in dll_candidates:
         if candidate and os.path.isfile(candidate):
-            return candidate
-    raise FileNotFoundError(
-        "Cannot find texconv.exe — ensure it's on PATH or in texconv/."
-    )
+            _texconv_dll = ctypes.cdll.LoadLibrary(candidate)
+            break
+    else:
+        raise FileNotFoundError(
+            "Cannot find texconv.dll — ensure it's in texconv/ or on PATH."
+        )
+    
+    # Set up function signatures
+    _texconv_dll.texconv.restype = ctypes.c_int
+    _texconv_dll.texconv.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_wchar_p),
+        ctypes.c_bool,
+        ctypes.c_bool,
+        ctypes.c_bool,
+        ctypes.c_wchar_p,
+        ctypes.c_int,
+    ]
+    _texconv_dll.init_com.restype = ctypes.c_int
+    _texconv_dll.init_com.argtypes = []
+    _texconv_dll.uninit_com.restype = None
+    _texconv_dll.uninit_com.argtypes = []
+    
+    # Manual COM init — critical to avoid 2nd-call crash
+    init_result = _texconv_dll.init_com()
+    _texconv_initialized = (init_result == 0 or init_result == 1)
+    
+    return _texconv_dll, _texconv_initialized
 
 
 def _encode_png_to_dds(
@@ -81,18 +122,31 @@ def _encode_png_to_dds(
     mip: int = 1,
     vflip: bool = True,
 ) -> str:
-    """Encode a PNG to DDS via texconv.exe subprocess. Returns DDS path."""
-    exe = _find_texconv()
-    args = [exe, "-f", fmt, "-m", str(mip), "-dx9", "-o", output_dir, "-y"]
+    """Encode a PNG to DDS via texconv.dll (ctypes). Returns DDS path."""
+    import ctypes
+    
+    dll, _ = _load_texconv_dll()
+    
+    err_buf = ctypes.create_unicode_buffer(1024)
+    argv = ["-f", fmt, "-m", str(mip), "-dx9", "-o", output_dir, "-y"]
     if vflip:
-        args.append("-vflip")
-    args.extend(["--", png_path])
-
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode != 0:
+        argv.append("-vflip")
+    argv.extend(["--", png_path])
+    
+    argv_arr = (ctypes.c_wchar_p * len(argv))(*argv)
+    rc = dll.texconv(
+        len(argv), argv_arr,
+        True,   # verbose
+        False,  # init_com=False (we manage COM manually)
+        True,   # allow_slow_codec
+        err_buf,
+        1024,
+    )
+    if rc != 0:
         raise RuntimeError(
-            f"texconv.exe failed (rc={result.returncode}): {result.stderr.strip()}"
+            f"texconv.dll failed (rc={rc}): {err_buf.value}"
         )
+    
     base = os.path.splitext(os.path.basename(png_path))[0]
     return os.path.join(output_dir, base + ".dds")
 
