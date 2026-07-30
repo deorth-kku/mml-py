@@ -940,10 +940,17 @@ def SpriteSet_from_file(filepath:str)->SpriteSet:
     bin_data = _load_bin_data(filepath)
     if not bin_data:
         raise ValueError(f"Failed to read file data from file {filepath}")
-    ss = try_parse_sprites_from_bytes(bin_data)
-    if not ss:
-        raise ValueError(f"Failed to parse sprites from {filepath}")
-    return ss
+    
+    import traceback
+    try:
+        ss = try_parse_sprites_from_bytes(bin_data)
+        if not ss:
+            raise ValueError(f"Failed to parse sprites from {filepath}")
+        return ss
+    except Exception as e:
+        print(f"SpriteSet_from_file error: {e}")
+        traceback.print_exc()
+        raise
 
 
 def export_sprites_to_png(file_path: str, output_dir: str):
@@ -1113,8 +1120,19 @@ def try_parse_sprites_from_bytes(data: bytes, candidate_offsets=None) -> 'Sprite
                 ss.read(r)
                 if ss.sprites:
                     return ss
-            except Exception:
-                pass
+            except Exception as e:
+                import traceback
+                print(f"  try_parse offset=0x{off:06X} little={little}: {type(e).__name__}: {e}")
+                # Print root header for debugging
+                if off == 0:
+                    try:
+                        root = struct.unpack_from('<8I', data, 0)
+                        print(f"    root header (LE): {root}")
+                        root_be = struct.unpack_from('>8I', data, 0)
+                        print(f"    root header (BE): {root_be}")
+                    except Exception:
+                        pass
+                traceback.print_exc()
             finally:
                 try:
                     r.pop_base()
