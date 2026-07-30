@@ -4,17 +4,17 @@
 
 ### 1️⃣ FARC → PNG 直接导出（推荐）
 ```bash
-python tools/txp_parser.py export-sprites-from-farc archive.farc -o sprites/
+python txp_parser.py export-sprites archive.farc -o sprites/
 ```
 
 ### 2️⃣ FARC 解包到 BIN
 ```bash
-python tools/txp_parser.py extract-farc archive.farc -o temp/
+python txp_parser.py extract-farc archive.farc -o temp/
 ```
 
 ### 3️⃣ BIN → PNG（已有 BIN 文件）
 ```bash
-python tools/txp_parser.py export-sprites archive.bin -o sprites/
+python txp_parser.py export-sprites archive.bin -o sprites/
 ```
 
 ---
@@ -22,10 +22,10 @@ python tools/txp_parser.py export-sprites archive.bin -o sprites/
 ## Python API 调用
 
 ```python
-from txp_parser import export_sprites_from_farc
+from txp_parser import export_sprites_to_png
 
 # 一行代码，搞定一切
-export_sprites_from_farc('archive.farc', 'output_sprites/')
+export_sprites_to_png('archive.farc', 'output_sprites/')
 ```
 
 ---
@@ -57,27 +57,26 @@ Exported: SONG_BG001 ((1280, 720)) x=2,y=2,w=1280,h=720 (MERGE_D5COMP_0)
 ### 场景 1：快速导出游戏精灵
 ```bash
 cd MikuMikuLibrary-master
-.venv\Scripts\python.exe tools/txp_parser.py export-sprites-from-farc "game_data/sprites.farc" -o "extracted_sprites/"
+.venv\Scripts\python.exe txp_parser.py export-sprites "game_data/sprites.farc" -o "extracted_sprites/"
 ```
 
 ### 场景 2：在 Python 脚本中批量处理
 ```python
-from pathlib import Path
-from tools.txp_parser import export_sprites_from_farc
+from txp_parser import export_sprites_to_png
 
-for farc_file in Path('archives').glob('*.farc'):
+for farc_file in Path('.').glob('*.farc'):
     output = f'sprites/{farc_file.stem}'
-    export_sprites_from_farc(str(farc_file), output)
+    export_sprites_to_png(str(farc_file), output)
 ```
 
 ### 场景 3：集成到现有工具
 ```python
 # 在你的工具中导入使用
 import sys
-sys.path.insert(0, 'path/to/MikuMikuLibrary/tools')
-from txp_parser import export_sprites_from_farc
+sys.path.insert(0, '.')
+from txp_parser import export_sprites_to_png
 
-export_sprites_from_farc(input_file, output_dir)
+export_sprites_to_png(input_file, output_dir)
 ```
 
 ---
@@ -106,7 +105,7 @@ ValueError: Failed to parse sprites from FARC data
 
 ## 性能提示
 
-- 🚀 **直接导出模式**（export-sprites-from-farc）最快
+- 🚀 **直接导出模式**（export-sprites）最快
 - 💾 **内存用量**：约为原始 BIN 文件大小 + 纹理缓冲区
 - ⏱️ **耗时**：主要取决于纹理解码和 PNG 压缩
 
@@ -114,14 +113,14 @@ ValueError: Failed to parse sprites from FARC data
 
 ```bash
 # 查看所有命令
-python tools/txp_parser.py -h
+python txp_parser.py -h
 
 # 查看特定命令帮助
-python tools/txp_parser.py export-sprites-from-farc -h
+python txp_parser.py export-sprites -h
 ```
 
 ## 相关文件
 
 - 📖 详细文档：[docs/SPRITE_EXPORT.md](docs/SPRITE_EXPORT.md)
 - 📝 示例代码：[examples/sprite_export_example.py](examples/sprite_export_example.py)
-- 🔧 工具源码：[tools/txp_parser.py](tools/txp_parser.py)
+- 🔧 工具源码：[txp_parser.py](txp_parser.py)

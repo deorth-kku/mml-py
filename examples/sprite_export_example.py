@@ -9,8 +9,8 @@ from FARC archives or BIN files programmatically.
 import sys
 import os
 
-# Add the tools directory to the path so we can import txp_parser
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
+# Add the project root to the path so we can import txp_parser
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from txp_parser import export_sprites_to_png
 
@@ -21,7 +21,7 @@ def example_1_farc_direct():
     print("Example 1: Direct FARC → PNG (no intermediate file)")
     print("=" * 60)
     
-    farc_path = "testfiles/spr_sel_pv1172.farc"
+    farc_path = "testfiles/spr_sel_pv6901.farc"
     output_dir = "output/sprites_from_farc"
     
     # This is the main function you'd use
@@ -36,7 +36,7 @@ def example_2_bin_file():
     print("Example 2: BIN file → PNG (if you already have .bin)")
     print("=" * 60)
     
-    bin_path = "testfiles/spr_sel_pv1172.bin"
+    bin_path = "testfiles/spr_sel_pv6901.bin"
     output_dir = "output/sprites_from_bin"
     
     # Use this if you already have the .bin file extracted
@@ -53,7 +53,7 @@ def example_3_batch_farc():
     
     # List of FARC files to process
     farc_files = [
-        "testfiles/spr_sel_pv1172.farc",
+        "testfiles/spr_sel_pv6901.farc",
         # "testfiles/other_archive.farc",
         # "testfiles/another_archive.FArC",
     ]

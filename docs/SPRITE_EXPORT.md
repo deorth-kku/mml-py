@@ -9,7 +9,7 @@
 ### 方式 1：直接从 FARC 导出精灵（推荐）
 
 ```bash
-python tools/txp_parser.py export-sprites-from-farc archive.farc -o output_sprites/
+python txp_parser.py export-sprites archive.farc -o output_sprites/
 ```
 
 **特点：**
@@ -24,10 +24,10 @@ python tools/txp_parser.py export-sprites-from-farc archive.farc -o output_sprit
 
 ```bash
 # 步骤 1: 解包 FARC 文件
-python tools/txp_parser.py extract-farc archive.farc -o extracted/
+python txp_parser.py extract-farc archive.farc -o extracted/
 
 # 步骤 2: 从 BIN 文件导出精灵
-python tools/txp_parser.py export-sprites extracted/archive.bin -o output_sprites/
+python txp_parser.py export-sprites extracted/archive.bin -o output_sprites/
 ```
 
 ## 在 Python 代码中使用
@@ -35,10 +35,10 @@ python tools/txp_parser.py export-sprites extracted/archive.bin -o output_sprite
 ### 方式 1：直接导出（推荐）
 
 ```python
-from txp_parser import export_sprites_from_farc
+from txp_parser import export_sprites_to_png
 
 # 从 FARC 档案直接导出精灵
-export_sprites_from_farc('archive.farc', 'output_sprites/')
+export_sprites_to_png('archive.farc', 'output_sprites/')
 ```
 
 ### 方式 2：从 BIN 文件导出
@@ -120,27 +120,17 @@ Exported: SONG_LOGO001 ((860, 420)) x=2,y=2,w=860,h=420 (MERGE_D5COMP_1)
 
 ## API 文档
 
-### `export_sprites_from_farc(farc_path, output_dir)`
+### `export_sprites_to_png(file_path, output_dir)`
 
-从 FARC 档案直接导出所有精灵为 PNG 文件。
+从 FARC 档案或 BIN 文件导出所有精灵为 PNG 文件（自动检测文件类型）。
 
 **参数：**
-- `farc_path` (str): FARC 档案的路径（支持 .farc, .FArC, .FArc）
+- `file_path` (str): FARC 或 BIN 文件的路径（支持 .farc, .FArC, .FArc, .bin）
 - `output_dir` (str): 输出目录
 
 **异常：**
-- `ValueError`: 无效的 FARC 文件或无法解析精灵
+- `ValueError`: 无效文件或无法解析精灵
 - `NotImplementedError`: 加密 FARC 文件不支持
-
-**返回值：** 无（文件直接写入到 output_dir）
-
-### `export_sprites_to_png(bin_path, output_dir)`
-
-从 BIN 文件导出所有精灵为 PNG 文件。
-
-**参数：**
-- `bin_path` (str): BIN 文件的路径
-- `output_dir` (str): 输出目录
 
 **返回值：** 无（文件直接写入到 output_dir）
 

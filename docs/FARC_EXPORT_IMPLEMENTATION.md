@@ -11,9 +11,9 @@
 
 ## 核心实现
 
-### 1. 新函数：`export_sprites_from_farc(farc_path, output_dir)`
+### 1. 新函数：`export_sprites_to_png(file_path, output_dir)`
 
-**位置：** `tools/txp_parser.py` (约 200 行代码)
+**位置：** `txp_parser.py` (~200 行代码)
 
 **功能流程：**
 ```
@@ -41,7 +41,7 @@ PNG 文件列表 (out)
 ### 2. CLI 命令
 
 ```bash
-python tools/txp_parser.py export-sprites-from-farc archive.farc -o output_dir/
+python txp_parser.py export-sprites archive.farc -o output_dir/
 ```
 
 **与原有命令对比：**
@@ -49,23 +49,22 @@ python tools/txp_parser.py export-sprites-from-farc archive.farc -o output_dir/
 | 命令 | 输入 | 输出 | 中间文件 |
 |------|------|------|--------|
 | `extract-farc` | FARC | BIN | 否（可选输出） |
-| `export-sprites` | BIN | PNG | 无 |
-| `export-sprites-from-farc` | FARC | PNG | 无 ✅ |
+| `export-sprites` | FARC/BIN | PNG | 无 ✅ |
 
 ### 3. Python API 使用
 
 ```python
-from txp_parser import export_sprites_from_farc
+from txp_parser import export_sprites_to_png
 
 # 简单调用
-export_sprites_from_farc('archive.farc', 'output/')
+export_sprites_to_png('archive.farc', 'output/')
 ```
 
 ## 测试结果
 
 ### 测试命令
 ```bash
-.venv\Scripts\python.exe tools/txp_parser.py export-sprites-from-farc testfiles/spr_sel_pv1172.farc -o testfiles/sprites_direct
+.venv\Scripts\python.exe txp_parser.py export-sprites testfiles/spr_sel_pv6901.farc -o testfiles/sprites_direct
 ```
 
 ### 输出
@@ -94,9 +93,9 @@ testfiles/sprites_direct/
 ## 文件变更
 
 ### 修改的文件
-- **`tools/txp_parser.py`**
-  - 添加 `export_sprites_from_farc()` 函数（~200 行）
-  - 添加 CLI 命令 `export-sprites-from-farc`
+- **`txp_parser.py`**
+  - 添加 `export_sprites_to_png()` 函数（~200 行）
+  - 添加 CLI 命令 `export-sprites`
   - 改进 `extract_farc()` 以支持所有三种 FARC 格式
 
 ### 新建的文件
@@ -116,7 +115,7 @@ export-sprites temp/archive.bin -o output/  # 读取 temp/archive.bin
 
 ### 方式 2：直接导出（新）
 ```bash
-export-sprites-from-farc archive.farc -o output/
+export-sprites archive.farc -o output/  # 直接导出
 ```
 - ✅ 无中间文件
 - ✅ 所有数据在内存中处理
@@ -152,7 +151,7 @@ export-sprites-from-farc archive.farc -o output/
 
 ## 总结
 
-通过实现 `export_sprites_from_farc()` 函数，我们现在可以：
+通过实现 `export_sprites_to_png()` 函数，我们现在可以：
 
 1. ✅ **直接从 FARC 导出 PNG**，无需生成中间文件
 2. ✅ **在 Python 代码中调用**，提供清晰的 API

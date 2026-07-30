@@ -1,3 +1,5 @@
 testfiles
+texconv
+source
 .venv
 __pycache__
