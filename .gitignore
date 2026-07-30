@@ -1,5 +1,6 @@
-testfiles
+testfiles*
 texconv
 source
 .venv
 __pycache__
+_*.py
