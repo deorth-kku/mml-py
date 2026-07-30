@@ -124,3 +124,51 @@ python txp_parser.py export-sprites -h
 - 📖 详细文档：[docs/SPRITE_EXPORT.md](docs/SPRITE_EXPORT.md)
 - 📝 示例代码：[examples/sprite_export_example.py](examples/sprite_export_example.py)
 - 🔧 工具源码：[txp_parser.py](txp_parser.py)
+
+---
+
+## 📦 FARC 构建 (Sprite Pack)
+
+### CLI 快速构建
+
+```bash
+# 基本命令
+python pack_sprite_selection.py pack-sprite-selection \
+    --bg bg.png --jk jk.png --logo logo.png --pv 6901 -o output/
+
+# 查看帮助
+python pack_sprite_selection.py pack-sprite-selection -h
+```
+
+### Python API
+
+```python
+from pack_sprite_selection import build_sprite_selection_farc
+
+# 一行代码构建 FARC
+path = build_sprite_selection_farc(
+    bg_path='bg.png',       # 1280x720
+    jk_path='jk.png',       # 502x502
+    logo_path='logo.png',   # 可变尺寸
+    pv='6901',              # PV 编号
+    output_dir='output',
+)
+print(f'已生成：{path}')
+```
+
+### 流程说明
+
+```
+PNG 输入 (BG + JK + LOGO)
+    │
+    ▼
+atlas_builder → txp_writer → farc_writer
+    │
+    ▼
+spr_sel_pv6901.farc
+```
+
+### 详细文档
+
+- 📖 FARC 构建指南：[docs/SPRITE_PACK.md](docs/SPRITE_PACK.md)
+- 📝 构建示例：[examples/sprite_pack_example.py](examples/sprite_pack_example.py)
