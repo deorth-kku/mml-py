@@ -26,6 +26,23 @@ DST_FILE = os.path.join(mm_mod, "rom", "mod_pv_db.txt")
 
 # ── Utility Functions ──────────────────────────────────────
 
+import pykakasi
+
+def convert_to_hiragana(text: str) -> str:
+    """
+    将输入的日文文本（包含汉字、片假名、平假名等）统一转换为纯平假名标音。
+    """
+    # 初始化 pykakasi 转换器
+    kaksi = pykakasi.kakasi()
+    
+    # 获取分词与转换结果
+    result = kaksi.convert(text)
+    
+    # 提取每个词转换后的平假名 (hira) 并拼接
+    hiragana_text = "".join([item['hira'] for item in result])
+    
+    return hiragana_text
+
 def read_pv_db(filepath: str) -> dict[str, list[str]]:
     """
     Read a PV DB file and convert it to a dict(pv_key, [lines]).
@@ -37,6 +54,13 @@ def read_pv_db(filepath: str) -> dict[str, list[str]]:
     with open(filepath, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.rstrip("\n")
+            # auto fix reading
+            k,sp,v= line.partition("=")
+            if sp=="":
+                continue
+            if k.endswith("song_name_reading"):
+                v=convert_to_hiragana(v)
+                line=k+sp+v
             if line.startswith("pv_") and "." in line:
                 key = line.split(".", 1)[0]
                 result.setdefault(key, []).append(line)
