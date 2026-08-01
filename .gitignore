@@ -4,3 +4,5 @@ source
 .venv
 __pycache__
 _*.py
+
+config.py
