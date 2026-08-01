@@ -175,6 +175,27 @@ def do_farc_upgrade(src_pv: str, dst_pv: str) -> None:
     print("--- FARC Upgrade ---")
     upgrade_farc_archive(src_pv, dst_pv)
 
+from auto_creat_mod_spr_db import Manager,read_farc,add_farc_to_Manager
+from pathlib import Path
+
+def do_create_db(dir:str)->None:
+    SPR_DB = Manager()
+    spr_path = Path(dir)
+    farc_list = []
+    for spr in spr_path.iterdir():
+        _temp_file = Path(spr)
+        if _temp_file.suffix.upper() == ".FARC":
+            farc_list.append(_temp_file)
+    if len(farc_list) >0:
+        for farc_file in farc_list:
+            farc_reader = read_farc(farc_file)
+            add_farc_to_Manager(farc_reader, SPR_DB)
+
+    outfile=dir+r"\mod_spr_db.bin"
+    print()
+    print(f"writing db file to {outfile}")
+    SPR_DB.write_db(outfile)
+
 
 # ── Entry Point ────────────────────────────────────────────
 
@@ -196,6 +217,7 @@ if __name__ == "__main__":
     insert_pv_block(src_pv, dst_pv)
     copy_pv_assets(src_pv, dst_pv)
     do_farc_upgrade(src_pv, dst_pv)
+    do_create_db(mm_mod+r"\rom\2d")
 
     print()
     print("=== All done ===")
