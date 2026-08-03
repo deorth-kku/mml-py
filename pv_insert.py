@@ -15,6 +15,7 @@ import os
 import re
 import glob
 import shutil
+import pykakasi
 
 # ── Configuration ──────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,8 +26,6 @@ DST_FILE = os.path.join(mm_mod, "rom", "mod_pv_db.txt")
 
 
 # ── Utility Functions ──────────────────────────────────────
-
-import pykakasi
 
 def convert_to_hiragana(text: str) -> str:
     """
@@ -54,13 +53,9 @@ def read_pv_db(filepath: str) -> dict[str, list[str]]:
     with open(filepath, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.rstrip("\n")
-            # auto fix reading
-            k,sp,v= line.partition("=")
-            if sp=="":
+            # auto fix reading (pykakasi only, no LLM)
+            if "=" not in line:
                 continue
-            if k.endswith("song_name_reading"):
-                v=convert_to_hiragana(v)
-                line=k+sp+v
             if line.startswith("pv_") and "." in line:
                 key = line.split(".", 1)[0]
                 result.setdefault(key, []).append(line)
@@ -155,6 +150,8 @@ def upgrade_farc_archive(src_pv: str, dst_pv: str) -> str:
 
 # ── Main Logic ─────────────────────────────────────────────
 
+from llm_reading import convert_reading
+
 def insert_pv_block(src_pv: str, dst_pv: str) -> None:
     """Extract the src_pv block, rename to dst_pv, and insert into DST."""
     print(f"Source: {SRC_FILE}")
@@ -169,11 +166,20 @@ def insert_pv_block(src_pv: str, dst_pv: str) -> None:
         sys.exit(0)
 
     # Rename keys and lines from src_pv to dst_pv
-    inserted_block = []
+    inserted_block :list[str] = []
     for line in src_db["pv_" + src_pv]:
         inserted_block.append(replace_pv(line, src_pv, dst_pv))
 
     print(f"  Extracted {len(inserted_block)} lines.")
+
+
+    for i,line in enumerate(inserted_block):
+        k,sp,v=line.partition("=")
+        if sp=="":
+            continue
+        if k.endswith("song_name_reading"):
+            v=convert_reading(v)
+            inserted_block[i]=k+sp+v
 
     # 2. Read destination DB and insert the renamed block
     dst_db = read_pv_db(DST_FILE)
