@@ -30,6 +30,8 @@ def upgrade_farc(
     pv: str | None = None,
     jk_padding: int = 2,  # pixels to add on each side (total: 2*padding)
     resolution_mode: int = 14,
+    logo_path: str | None = None,
+    bg_path: str | None = None,
 ) -> str:
     """Upgrade a Sprite Selection FARC archive.
 
@@ -39,6 +41,10 @@ def upgrade_farc(
         pv: New PV number (3 or 4 digits). If None, uses the original PV.
         jk_padding: Pixels to add on each side of JK (default: 2 for 1px border).
         resolution_mode: Resolution mode (default: 14=HDTV1080).
+        logo_path: Optional path to a PNG file to use as the LOGO, overriding
+            the one extracted from the source FARC.
+        bg_path: Optional path to a PNG file to use as the BG, overriding
+            the one extracted from the source FARC.
 
     Returns:
         Path to the generated .farc file.
@@ -55,13 +61,20 @@ def upgrade_farc(
                 f'Expected 3 PNG files, found {len(png_files)}: {png_files}'
             )
 
-        bg_path = str(png_files[0])
+        extracted_bg = str(png_files[0])
         jk_path = str(png_files[1])
-        logo_path = str(png_files[2])
+        extracted_logo = str(png_files[2])
 
-        print(f'  BG: {bg_path}')
+        print(f'  BG (extracted): {extracted_bg}')
         print(f'  JK: {jk_path}')
-        print(f'  LOGO: {logo_path}')
+        print(f'  LOGO (extracted): {extracted_logo}')
+
+        # Use override logo if provided
+        if logo_path is not None:
+            print(f'  LOGO (override): {logo_path}')
+        # Use override bg if provided
+        if bg_path is not None:
+            print(f'  BG (override): {bg_path}')
 
         # --- Pad JK if needed ---
         jk_img = Image.open(jk_path).convert('RGBA')
@@ -96,13 +109,16 @@ def upgrade_farc(
 
         # --- Pack ---
         print(f'Packing with PV={pv}...')
+        # Use override logo/bg if provided, otherwise use extracted ones
+        final_logo = logo_path if logo_path is not None else extracted_logo
+        final_bg = bg_path if bg_path is not None else extracted_bg
         # Use output_dir to control where the file is written
         if output_dir is None:
             output_dir = os.path.dirname(input_path)
         output = build_sprite_selection_farc(
-            bg_path=bg_path,
+            bg_path=final_bg,
             jk_path=jk_path,
-            logo_path=logo_path,
+            logo_path=final_logo,
             pv=pv,
             output_dir=output_dir,
             resolution_mode=resolution_mode,
@@ -123,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                         help='Pixels to add on each side of JK (default: 2).')
     parser.add_argument('--resolution-mode', type=int, default=14,
                         help='Resolution mode (default: 14=HDTV1080).')
+    parser.add_argument('--logo', help='PNG file to use as LOGO, overriding the extracted one.')
+    parser.add_argument('--bg', help='PNG file to use as BG, overriding the extracted one.')
 
     args = parser.parse_args(argv)
 
@@ -133,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
             pv=args.pv,
             jk_padding=args.jk_padding,
             resolution_mode=args.resolution_mode,
+            logo_path=args.logo,
+            bg_path=args.bg,
         )
         return 0
     except Exception as e:
