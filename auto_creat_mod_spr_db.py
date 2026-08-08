@@ -429,9 +429,11 @@ class read_farc:
         data = _file.read(_file_info["SizeComp"])
         return zlib.decompress(data, wbits=16+zlib.MAX_WBITS, bufsize=_file_info["Size"])
 
+from config import mm_mod
+
 if __name__=="__main__":
     SPR_DB = Manager()
-    spr_path = Path("2d")
+    spr_path = Path(mm_mod) / Path(r"rom\2d")
     farc_list = []
     for spr in spr_path.iterdir():
         _temp_file = Path(spr)
@@ -442,4 +444,4 @@ if __name__=="__main__":
             farc_reader = read_farc(farc_file)
             add_farc_to_Manager(farc_reader, SPR_DB)
             
-    SPR_DB.write_db("output\\mod_spr_db.bin")
+    SPR_DB.write_db(spr_path/ Path(r"\mod_spr_db.bin"))
