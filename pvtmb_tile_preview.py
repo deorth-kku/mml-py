@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageChops
 
 # Parallelogram corners in the 128x64 tile coordinate frame (upright).
 # Both slanted edges shear right at slope ≈0.28; bottom edge at y=63 (1px padding).
-TL, TR, BL, BR = (30, 1), (110, 1), (48, 63), (128, 63)
+TL, TR, BL, BR = (29, 1), (109, 1), (47, 63), (127, 63)
 TW, TH = 128, 64
 
 
