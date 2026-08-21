@@ -4,5 +4,6 @@ source
 .venv
 __pycache__
 _*.py
+.vscode
 
 config.py
