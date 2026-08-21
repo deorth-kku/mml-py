@@ -172,3 +172,73 @@ spr_sel_pv6901.farc
 
 - 📖 FARC 构建指南：[docs/SPRITE_PACK.md](docs/SPRITE_PACK.md)
 - 📝 构建示例：[examples/sprite_pack_example.py](examples/sprite_pack_example.py)
+
+---
+
+## 🖼️ PVTMB 缩略图生成 (pvtmb_add_thumbnail)
+
+给 `spr_sel_pvtmb_<mod>.farc` **新增或替换**某个 PV 的缩略图 tile：一张图 + 一个 PV 号即可。
+自动判断 create / add / update（详见 [docs/PVTMB_IMPLEMENTATION.md](docs/PVTMB_IMPLEMENTATION.md)）。
+
+### CLI 快速使用
+
+```bash
+# 新增 / 更新（--farc 不存在则创建；pv 不存在则新增；pv 已是 sprite 则覆盖其 tile）
+python pvtmb_add_thumbnail.py --farc testfiles\spr_sel_pvtmb_demo.farc ^
+      --pv 7001 --image jacket.png
+
+# 输出到别处（不覆盖原文件）
+python pvtmb_add_thumbnail.py --farc path\spr_sel_pvtmb_mod.farc ^
+      --pv 7001 --image jacket.png --out path\out.farc
+
+# 查看帮助
+python pvtmb_add_thumbnail.py -h
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--farc` | 目标 `spr_sel_pvtmb_*.farc`（默认读 `config.py` 里的 `pvtmb_farc`） |
+| `--pv` | **必须**：十进制 PV 号，也是 sprite 名字（如 `6916`） |
+| `--image` | **必须**：源图片，带不带 alpha 均可 |
+| `--out` | 输出 farc；默认覆盖 `--farc` |
+
+运行后打印 `action / pv / tex_index / tile(col,row) / X,Y / mode / textures / sprites / 路径`。
+
+### Python API
+
+```python
+import pvtmb_add_thumbnail as p
+
+# 主入口：返回输出 farc 路径
+p.run("testfiles\spr_sel_pvtmb_demo.farc", "7001", "jacket.png", "testfiles\spr_sel_pvtmb_demo.farc")
+
+# 单 tile 预处理（与 pvtmb_tile_preview.make_tile 逐像素一致，128x64 抗锯齿平行四边形）
+thumb = p.prepare_thumbnail("jacket.png")
+```
+
+### 流程说明
+
+```
+PNG 输入 (一张图) + PV 号
+    │
+    ▼
+prepare_thumbnail（cover 99x60 → 内接平行四边形 → 斜边抗锯齿）
+    ▼
+paint_tile（alpha_composite 到底图格子，mode 14 / HDTV1080）
+    ▼
+serialize_pvtmb_bin → farc_writer（RGBA8 无 DDS/texconv，GZip + align 16）
+    │
+    ▼
+spr_sel_pvtmb_<mod>.farc  (+ 同目录 sidecar 底图 <stem>_tex0.png)
+```
+
+- **create**：farc 不存在 → 新建黑色 2048×1024 底图 + sidecar。
+- **add**：farc 存在、pv 非 sprite → 行优先找空闲格子（满则自动加新底图 `MERGE_D5COMP_k`）。
+- **update**：pv 已是 sprite → 覆盖其 tile，不新增记录；**幂等**（同图重复跑字节一致）。
+- 底图以 `<farc_stem>_tex{k}.png` 缓存在 farc 同目录（upright，可直接看图软件检查每个格子）。
+
+### 相关工具
+
+- 📖 详细使用指南：[docs/PVTMB_IMPLEMENTATION.md](docs/PVTMB_IMPLEMENTATION.md)
+- 🔧 工具源码：[pvtmb_add_thumbnail.py](pvtmb_add_thumbnail.py)
+- 👀 单图 tile 预览：[pvtmb_tile_preview.py](pvtmb_tile_preview.py)（`python pvtmb_tile_preview.py input.png [output.png]`）
