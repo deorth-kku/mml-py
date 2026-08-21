@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageChops
 
 # Parallelogram corners in the 128x64 tile coordinate frame (upright).
 # Both slanted edges shear right at slope ≈0.28; bottom edge at y=63 (1px padding).
-TL, TR, BL, BR = (28, 1), (108, 1), (45, 63), (125, 63)
+TL, TR, BL, BR = (30, 1), (110, 1), (48, 63), (128, 63)
 TW, TH = 128, 64
 
 
@@ -50,14 +50,25 @@ def build_parallelogram_mask(aa: bool = True, ssample: int = 8) -> Image.Image:
 
 
 def cover_to(img: Image.Image, size: tuple[int, int]) -> Image.Image:
-    """Uniformly scale `img` to COVER `size` preserving aspect ratio, then center-crop."""
+    """Center-crop `img` to the target aspect ratio, then scale to exactly `size`.
+
+    Order is crop-then-scale (not scale-then-crop): first cut the source down to
+    the W:H ratio so no source detail is thrown away by an oversized cover-scale,
+    then uniform-scale (LANCZOS) to the exact bounding box. Never distorts.
+    """
     W, H = size
     iw, ih = img.size
-    s = max(W / iw, H / ih)
-    ns = (max(1, round(iw * s)), max(1, round(ih * s)))
-    img = img.resize(ns, Image.LANCZOS)
-    left, top = (ns[0] - W) // 2, (ns[1] - H) // 2
-    return img.crop((left, top, left + W, top + H))
+    if iw * H > ih * W:
+        # source wider than target -> keep full height, crop left/right
+        new_w = max(1, round(ih * W / H))
+        left = (iw - new_w) // 2
+        img = img.crop((left, 0, left + new_w, ih))
+    else:
+        # source taller than target -> keep full width, crop top/bottom
+        new_h = max(1, round(iw * H / W))
+        top = (ih - new_h) // 2
+        img = img.crop((0, top, iw, top + new_h))
+    return img.resize((W, H), Image.LANCZOS)
 
 
 def make_tile(src_path: str, dst_path: str):
