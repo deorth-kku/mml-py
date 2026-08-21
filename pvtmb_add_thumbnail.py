@@ -28,9 +28,10 @@ import txp_writer as tw
 import farc_writer as fw
 
 try:
-    from config import pvtmb_farc
+    from config import pvtmb_farc, mm_mod
 except Exception:  # config.py may not define it yet
     pvtmb_farc = None
+    mm_mod = None
 
 # --- format constants (spec 0.2/0.3/0.4) -------------------------------------
 SHEET_W, SHEET_H = 2048, 1024
@@ -213,6 +214,14 @@ def run(farc_path: str, pv: str, image_path: str, out_path: str):
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
     with open(out_path, "wb") as f:
         f.write(farc_data)
+
+    # Rebuild mod_spr_db.bin like pv_insert does, but only when the output farc
+    # is written into the live mod's 2d folder (working/test copies are skipped).
+    if mm_mod and out_path:
+        mm_2d_abs = os.path.abspath(mm_mod + r"\rom\2d")
+        if os.path.abspath(out_path).startswith(mm_2d_abs + os.sep):
+            from pv_insert import do_create_db
+            do_create_db(mm_mod + r"\rom\2d")
 
     print(f"action={action} pv={pv} tex_index={ti} tile=(col {col}, row {row}) "
           f"X={2 + 132 * col} Y={2 + 68 * row} mode={RES_MODE} textures={len(bases)} sprites={len(sprites)}")
