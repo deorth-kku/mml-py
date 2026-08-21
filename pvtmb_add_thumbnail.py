@@ -20,6 +20,7 @@ base sheets (stored UPRIGHT, as viewed). The mip chain + BIN are always regenera
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from PIL import Image
 
@@ -153,8 +154,50 @@ def load_base(farc_path: str, idx: int, ss) -> Image.Image:
     return upright.copy()
 
 
+# --- pv -> input path map (sidecar JSON) --------------------------------------
+def pvmap_path(base_path: str) -> str:
+    """Path of the pv->input-path JSON that lives next to a farc (same stem/dir)."""
+    return f"{os.path.splitext(base_path)[0]}_pv_input_map.json"
+
+
+def load_pvmap(farc_path: str) -> dict:
+    """Load the pv->input-path map next to the *input* farc, if present.
+
+    Returns an empty dict when the file is absent or unreadable so a missing map
+    never blocks a run (spec: read the JSON if it exists in the same directory).
+    """
+    path = pvmap_path(farc_path)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def write_pvmap(out_path: str, pvmap: dict) -> None:
+    """Write the pv->input-path map next to the *output* farc.
+
+    Keys are the decimal pv id (as a string -- JSON object keys are strings),
+    values are the absolute path of the input image for that pv.
+    """
+    if not pvmap:
+        return
+    path = pvmap_path(out_path)
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(pvmap, f, ensure_ascii=False, indent=2)
+
+
 # --- main flow ----------------------------------------------------------------
 def run(farc_path: str, pv: str, image_path: str, out_path: str):
+    # pv -> input-path map: read the existing map (if any) next to the input farc,
+    # append/overwrite this run's entry, then persist next to the output farc.
+    pvmap = load_pvmap(farc_path)
+    pvmap[str(pv)] = os.path.abspath(image_path)
+
     create = not os.path.exists(farc_path)
     ss = tp.SpriteSet_from_file(farc_path) if create is False else None
     existing = next((s for s in ss.sprites if s.name == pv), None) if ss else None
@@ -223,6 +266,9 @@ def run(farc_path: str, pv: str, image_path: str, out_path: str):
     with open(out_path, "wb") as f:
         f.write(farc_data)
 
+    # persist pv -> input-path map next to the output farc
+    write_pvmap(out_path, pvmap)
+
     # Rebuild mod_spr_db.bin like pv_insert does, but only when the output farc
     # is written into the live mod's 2d folder (working/test copies are skipped).
     if mm_mod and out_path:
@@ -235,6 +281,8 @@ def run(farc_path: str, pv: str, image_path: str, out_path: str):
           f"X={2 + 132 * col} Y={2 + 68 * row} mode={RES_MODE} textures={len(bases)} sprites={len(sprites)}")
     print(f"  bin={len(bin_data)} B  farc={len(farc_data)} B  -> {out_path}")
     print("  sidecars: " + ", ".join(f"{out_stem}_tex{i}.png" for i in range(len(bases))))
+    if pvmap:
+        print(f"  pvmap: {pvmap_path(out_path)} ({len(pvmap)} entries)")
     return out_path
 
 
