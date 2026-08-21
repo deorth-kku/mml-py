@@ -164,9 +164,15 @@ rect_begin/rect_end UV from the formula (0.4). Keep `SpriteRecord` for SPR_SEL a
 Paint onto a base texture (RGBA, transparent bg). **Work in UPRIGHT coordinates** (flip the DX-stored
 sheet once, per 0.3b-2):
 - Build the fixed parallelogram FRAME_MASK (128×64, upright, per 0.3b-1).
-- `base.paste(thumb, (col*128, row*64), mask=FRAME_MASK)` — alpha-composite; preserves all other tiles
-  and leaves the tile's transparent corners intact. Do NOT paste with `mask=thumb` (that would fill the
-  whole rectangle).
+- **Paint the tile at the sprite's real pixel origin `(x, y) = (2+132*col, 2+68*row)`, NOT at
+  `(col*128, row*64)`.** The game samples the sheet through the sprite's UV rect, which begins at
+  `(x, y)`; painting on the 128-pixel tile grid would drift the art by `(2+132*col) - 128*col =
+  2 + 4*col` px — a few pixels for the first columns, growing each column to the right. That drift is
+  exactly the "single tile looks right but spacing between tiles is off" symptom. See
+  `memories/repo/pvtmb_tile_spacing.md`.
+- `base.alpha_composite(thumb, (x, y))` — the thumb carries its own baked parallelogram alpha, so the
+  transparent corners (and all other tiles) are left untouched. Do NOT paste with `mask=thumb` (that
+  would fill the whole rectangle).
 Mips regenerated from the modified base: `gen_mips(base)` halves until 1×1 (12 levels), LANCZOS.
 Because the sheet is stored upside-down, apply the same `FLIP_TOP_BOTTOM` when reading the cached PNG back
 into raw bytes before serializing, so the mip payloads match game orientation.

@@ -72,13 +72,20 @@ def prepare_thumbnail(src, tile=(TILE_W, TILE_H)) -> Image.Image:
     return out
 
 
-def paint_tile(base: Image.Image, thumb: Image.Image, col: int, row: int) -> None:
-    """Place ``thumb`` (128x64 RGBA with baked parallelogram alpha) at tile (col,row).
+def paint_tile(base: Image.Image, thumb: Image.Image, x: int, y: int) -> None:
+    """Place ``thumb`` (128x64 RGBA with baked parallelogram alpha) at sheet pixel (x,y).
+
+    Paint at the sprite's real pixel origin ``x=2+132*col``, ``y=2+68*row`` (spec 0.4),
+    NOT at ``(col*TILE_W, row*TILE_H)``. The game samples the sheet via the sprite's UV
+    rect, which begins at (x, y); painting at the 128-pixel tile grid instead would drift
+    the art by ``(2+132*col) - 128*col = 2 + 4*col`` px -- a few pixels for the first
+    columns, growing each column to the right. That drift is exactly the "spacing between
+    tiles is off" symptom.
 
     ``alpha_composite`` reads the thumb's own alpha, so the transparent corners (and all
     other tiles) are left untouched -- equivalent to pasting through FRAME_MASK.
     """
-    base.alpha_composite(thumb, (col * TILE_W, row * TILE_H))
+    base.alpha_composite(thumb, (x, y))
 
 
 # --- coordinate helpers (spec 0.4) --------------------------------------------
@@ -162,10 +169,11 @@ def run(farc_path: str, pv: str, image_path: str, out_path: str):
         bases.append(Image.new("RGBA", (SHEET_W, SHEET_H), (0, 0, 0, 0)))
 
     if existing is not None:
-        # UPDATE: repaint the PV's existing tile (spec 5.2)
+        # UPDATE: repaint the PV's existing tile (spec 5.2).
+        # Paint at the sprite's real pixel origin (existing.x, existing.y), not a 128-grid.
         ti = existing.texture_index
         col, row = tile_from_xy(int(existing.x), int(existing.y))
-        paint_tile(bases[ti], prepare_thumbnail(image_path), col, row)
+        paint_tile(bases[ti], prepare_thumbnail(image_path), int(existing.x), int(existing.y))
         sprites = list(ss.sprites)
         modes = list(ss.sprite_modes)
         action = "update"
@@ -179,8 +187,8 @@ def run(farc_path: str, pv: str, image_path: str, out_path: str):
             if len(bases) >= GRID_COLS * GRID_ROWS:  # safety cap
                 raise RuntimeError("out of thumbnail sheets (max 256 tiles/texture)")
         ti, col, row = free
-        paint_tile(bases[ti], prepare_thumbnail(image_path), col, row)
         x, y, rb, re = uv_for_tile(col, row)
+        paint_tile(bases[ti], prepare_thumbnail(image_path), x, y)
         new_sp = tw.SpriteRecord(
             name=pv, texture_index=ti, x=x, y=y,
             width=TILE_W, height=TILE_H, rect_begin=rb, rect_end=re,
