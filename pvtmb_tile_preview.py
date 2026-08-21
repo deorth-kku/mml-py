@@ -11,9 +11,10 @@ This mirrors exactly what the builder does when compositing: it produces a 128x6
 
 Parallelogram corners (measured upright from testfiles/pvtmb_extract/8227.png,
 edge-fit + confirmed against the article's manual measurement):
-    TL=(28,1)  TR=(108,1)  BL=(45,61)  BR=(127,61)
+    TL=(28,1)  TR=(108,1)  BL=(45,63)  BR=(125,63)
 Top & bottom edges are horizontal; left & right edges slant, shearing right
-going downward.
+at slope ≈0.28 (both edges share the same slope). Bottom edge sits at y=63,
+leaving 1px of transparent padding below.
 
 Usage:
     python pvtmb_tile_preview.py input.png [output.png]
@@ -22,7 +23,8 @@ import sys
 from PIL import Image, ImageDraw, ImageChops
 
 # Parallelogram corners in the 128x64 tile coordinate frame (upright).
-TL, TR, BL, BR = (28, 1), (108, 1), (45, 61), (127, 61)
+# Both slanted edges shear right at slope ≈0.28; bottom edge at y=63 (1px padding).
+TL, TR, BL, BR = (28, 1), (108, 1), (45, 63), (125, 63)
 TW, TH = 128, 64
 
 
@@ -64,9 +66,9 @@ def make_tile(src_path: str, dst_path: str):
     # Bounding box of the parallelogram art region, in tile coords.
     minx = min(TL[0], TR[0], BL[0], BR[0])  # 28
     miny = min(TL[1], TR[1], BL[1], BR[1])  # 1
-    maxx = max(TL[0], TR[0], BL[0], BR[0])  # 127
-    maxy = max(TL[1], TR[1], BL[1], BR[1])  # 61
-    bw, bh = maxx - minx, maxy - miny       # 99 x 60
+    maxx = max(TL[0], TR[0], BL[0], BR[0])  # 125
+    maxy = max(TL[1], TR[1], BL[1], BR[1])  # 63
+    bw, bh = maxx - minx, maxy - miny       # 97 x 62
 
     # Cover-scale the input to the bounding box (max size, aspect preserved),
     # then place it at the bbox origin so the parallelogram is inscribed in it.

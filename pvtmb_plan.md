@@ -42,9 +42,10 @@ Verified against `testfiles/spr_sel_pvtmb_lavverso_song_pack.farc` and the commu
    thumbnail you must composite through this fixed parallelogram alpha-mask — `base.paste(thumb, pos, mask=FRAME_MASK)`,
    **not** fill the whole 128×64 tile.
    **Finalized corners (measured upright from `testfiles/pvtmb_extract/8227.png`, edge-fit + confirmed against the
-   article's manual measurement):** top edge `y=1` x∈[28,108], bottom edge `y=61` x∈[45,127]; left edge shears
-   `(28,1)→(45,61)`, right edge shears `(108,1)→(127,61)` (slope ≈ 0.28 left, ≈ 0.32 right). Full parallelogram:
-   `TL=(28,1), TR=(108,1), BL=(45,61), BR=(127,61)`. See `pvtmb_tile_preview.py` (reference tool: arbitrary input
+   article's manual measurement):** top edge `y=1` x∈[28,108], bottom edge `y=63` x∈[45,125]; left & right edges
+   shear right at the **same** slope ≈0.28 (left was the reference; right was corrected to match). Full
+   parallelogram: `TL=(28,1), TR=(108,1), BL=(45,63), BR=(125,63)`. Bottom leaves 1px transparent padding (tile
+   height 64). See `pvtmb_tile_preview.py` (reference tool: arbitrary input
    PNG → **no warp/distortion** — inscribe this parallelogram as large as possible preserving aspect, crop it out,
    then uniform-scale to 128×64 → tile PNG with transparent corners) to visually verify the shape before finalizing
    `FRAME_MASK`. Confirmed visually (see `testfiles/pvtmb_extract/tile_preview_out.png`).

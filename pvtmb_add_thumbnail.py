@@ -47,11 +47,11 @@ from PIL import ImageChops
 
 FRAME_MASK = build_parallelogram_mask()
 
-# Art bounding box of the parallelogram, in tile coords (spec 0.3b-1): (28,1)-(127,61).
+# Art bounding box of the parallelogram, in tile coords (spec 0.3b-1): (28,1)-(125,63).
 _ART_MIN = (min(TL[0], TR[0], BL[0], BR[0]), min(TL[1], TR[1], BL[1], BR[1]))  # (28, 1)
 _ART_SIZE = (
-    max(TL[0], TR[0], BL[0], BR[0]) - _ART_MIN[0],  # 99
-    max(TL[1], TR[1], BL[1], BR[1]) - _ART_MIN[1],  # 60
+    max(TL[0], TR[0], BL[0], BR[0]) - _ART_MIN[0],  # 97
+    max(TL[1], TR[1], BL[1], BR[1]) - _ART_MIN[1],  # 62
 )
 
 
@@ -59,13 +59,13 @@ _ART_SIZE = (
 def prepare_thumbnail(src, tile=(TILE_W, TILE_H)) -> Image.Image:
     """Mirror ``pvtmb_tile_preview.make_tile`` exactly.
 
-    Cover-scale the source to the parallelogram's art bbox (99x60) preserving aspect
+    Cover-scale the source to the parallelogram's art bbox (97x62) preserving aspect
     ratio (no warp), inscribe it at the bbox origin, then bake the transparent corners
     into the alpha. The builder and the reference preview therefore always produce the
     identical tile -- no divergence in zoom or crop.
     """
     img = Image.open(src).convert("RGBA")
-    patch = cover_to(img, _ART_SIZE)  # 99x60, aspect-preserving cover + center-crop
+    patch = cover_to(img, _ART_SIZE)  # 97x62, aspect-preserving cover + center-crop
     out = Image.new("RGBA", tile, (0, 0, 0, 0))
     out.alpha_composite(patch, _ART_MIN)
     out.putalpha(ImageChops.multiply(out.split()[3], FRAME_MASK))  # transparent corners
