@@ -169,7 +169,7 @@ sheet once, per 0.3b-2):
   `(x, y)`; painting on the 128-pixel tile grid would drift the art by `(2+132*col) - 128*col =
   2 + 4*col` px — a few pixels for the first columns, growing each column to the right. That drift is
   exactly the "single tile looks right but spacing between tiles is off" symptom. See
-  `memories/repo/pvtmb_tile_spacing.md`.
+  the ``pvtmb_tile_spacing`` memory note.
 - `base.alpha_composite(thumb, (x, y))` — the thumb carries its own baked parallelogram alpha, so the
   transparent corners (and all other tiles) are left untouched. Do NOT paste with `mask=thumb` (that
   would fill the whole rectangle).

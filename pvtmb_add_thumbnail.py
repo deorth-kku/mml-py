@@ -6,12 +6,15 @@ Reuses the existing read/write pipeline:
     * ``txp_writer``  -- PVTMB BIN (serialize_pvtmb_bin, serialize_mip_payload)
     * ``farc_writer`` -- FArC wrapper (write_farc)
 
-See ``pvtmb_plan.md`` and ``memories/repo/pvtmb_format.md`` for the format spec.
+See ``pvtmb_plan.md`` and the ``pvtmb_format`` memory note for the format spec.
 
 Flow is auto-selected:
     * farc absent                       -> CREATE (fresh black sheets + sidecar PNGs)
     * farc present, pv not a sprite     -> ADD    (row-major free tile, new sheet if needed)
     * farc present, pv already a sprite -> UPDATE (overwrite that PV's tile)
+    * --rebuild                         -> REBUILD from the saved pv->input map JSON (fresh
+      black sheets, every PV re-placed row-major). Ignores any existing FArC + cached base
+      PNGs. --pv/--image are optional in this mode.
 
 The cached sidecar PNG (<farc_stem>_tex{k}.png) is the single source of truth for the
 base sheets (stored UPRIGHT, as viewed). The mip chain + BIN are always regenerated
@@ -299,19 +302,119 @@ def export_sheet_upright(farc_path: str, out_dir: str, idx: int = 0) -> str:
     return path
 
 
+def run_rebuild(farc_path: str, out_path: str) -> str:
+    """--rebuild: reconstruct the farc from scratch using the saved pv->input map.
+
+    Ignores any existing FArC and cached base PNGs (spec: rebuild from 0). Every PV in the
+    sidecar JSON is re-placed row-major across fresh black sheets, exactly as the CREATE/ADD
+    flow would have laid them out, then the mip chain + BIN are regenerated from those sheets.
+
+    The map only stores pv -> input-path, so texture index and tile position are re-derived by
+    placing entries in map order: texture = k // 256, (row, col) = divmod(k % 256, GRID_ROWS).
+    This reproduces the original placement as long as no PV was ever removed (updates keep their
+    position, so map insertion order == add order == sprite order).
+    """
+    pvmap = load_pvmap(farc_path)
+    if not pvmap:
+        raise FileNotFoundError(
+            f"no pv->input map found at {pvmap_path(farc_path)}; nothing to rebuild"
+        )
+
+    missing = [p for p in pvmap.values() if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} input image(s) from the map are missing:\n  " + "\n  ".join(missing)
+        )
+
+    # fresh black sheets, grown as needed (spec 5.1)
+    bases: list[Image.Image] = [Image.new("RGBA", (SHEET_W, SHEET_H), (0, 0, 0, 0))]
+    sprites: list[tw.SpriteRecord] = []
+    modes: list[int] = []
+
+    for pv, image_path in pvmap.items():
+        idx = len(sprites)
+        ti = idx // (GRID_COLS * GRID_ROWS)
+        while len(bases) <= ti:
+            bases.append(Image.new("RGBA", (SHEET_W, SHEET_H), (0, 0, 0, 0)))
+        row, col = divmod(idx % (GRID_COLS * GRID_ROWS), GRID_ROWS)
+        x, y, rb, re = uv_for_tile(col, row)
+        paint_tile(bases[ti], prepare_thumbnail(image_path), x, y)
+        sprites.append(
+            tw.SpriteRecord(
+                name=pv, texture_index=ti, x=x, y=y,
+                width=TILE_W, height=TILE_H, rect_begin=rb, rect_end=re,
+            )
+        )
+        modes.append(RES_MODE)
+
+    tex_names = [TEX_PREFIX + str(i) for i in range(len(bases))]
+
+    # persist sidecars (upright source of truth)
+    out_stem = os.path.splitext(out_path)[0]
+    for i, base in enumerate(bases):
+        base.save(f"{out_stem}_tex{i}.png")
+
+    # regenerate mip chain + BIN from the cached upright base (spec 4)
+    mip_textures = [
+        tw.MipTexture(
+            name=tex_names[i], width=SHEET_W, height=SHEET_H, format=2,
+            mips=tuple(tw.serialize_mip_payload(base, format_id=2)),
+        )
+        for i, base in enumerate(bases)
+    ]
+    bin_data = tw.serialize_pvtmb_bin(sprites, mip_textures, sprite_modes=modes)
+
+    entry_name = os.path.splitext(os.path.basename(out_path))[0] + ".bin"
+    farc_data = fw.write_farc(bin_data, entry_name)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(farc_data)
+
+    # persist the map next to the output farc (unchanged set of entries)
+    write_pvmap(out_path, pvmap)
+
+    # Rebuild mod_spr_db.bin like pv_insert does, but only when the output farc
+    # is written into the live mod's 2d folder (working/test copies are skipped).
+    if mm_mod and out_path:
+        mm_2d_abs = os.path.abspath(mm_mod + r"\rom\2d")
+        if os.path.abspath(out_path).startswith(mm_2d_abs + os.sep):
+            from pv_insert import do_create_db
+            do_create_db(mm_mod + r"\rom\2d")
+
+    print(f"action=rebuild pv_count={len(pvmap)} textures={len(bases)} sprites={len(sprites)} "
+          f"mode={RES_MODE}")
+    print(f"  bin={len(bin_data)} B  farc={len(farc_data)} B  -> {out_path}")
+    print("  sidecars: " + ", ".join(f"{out_stem}_tex{i}.png" for i in range(len(bases))))
+    if pvmap:
+        print(f"  pvmap: {pvmap_path(out_path)} ({len(pvmap)} entries)")
+    return out_path
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Add/update a PVTMB thumbnail sprite in a spr_sel .farc."
     )
     parser.add_argument("--farc", default=pvtmb_farc,
                         help="target spr_sel_pvtmb_*.farc (default: config.pvtmb_farc)")
-    parser.add_argument("--pv", required=True, help="decimal PV id (also the sprite name)")
-    parser.add_argument("--image", required=True, help="source image (jacket/thumbnail; alpha optional)")
+    parser.add_argument("--pv", help="decimal PV id (also the sprite name)")
+    parser.add_argument("--image", help="source image (jacket/thumbnail; alpha optional)")
     parser.add_argument("--out", default=None, help="output farc (default: overwrite --farc)")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="rebuild the farc from scratch using the saved pv->input map JSON "
+                             "(ignores any existing farc + cached base PNGs); then --pv/--image are "
+                             "optional")
     args = parser.parse_args()
     if not args.farc:
         parser.error("no --farc given and config.pvtmb_farc is unset")
-    run(args.farc, args.pv, args.image, args.out or args.farc)
+    out_path = args.out or args.farc
+    if args.rebuild:
+        run_rebuild(args.farc, out_path)
+    else:
+        if not args.pv:
+            parser.error("--pv is required (or pass --rebuild to rebuild from the saved map)")
+        if not args.image:
+            parser.error("--image is required (or pass --rebuild to rebuild from the saved map)")
+        run(args.farc, args.pv, args.image, out_path)
 
 
 if __name__ == "__main__":
