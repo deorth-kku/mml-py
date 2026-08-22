@@ -40,7 +40,7 @@ except Exception:  # config.py may not define it yet
 # --- format constants (spec 0.2/0.3/0.4) -------------------------------------
 SHEET_W, SHEET_H = 2048, 1024
 TILE_W, TILE_H = 128, 64
-GRID_COLS = GRID_ROWS = 16
+GRID_COLS = GRID_ROWS = 15
 RES_MODE = 14  # HDTV1080
 TEX_PREFIX = "MERGE_D5COMP_"
 
