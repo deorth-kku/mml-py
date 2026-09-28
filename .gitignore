@@ -3,7 +3,7 @@ texconv
 source
 .venv
 __pycache__
-_*.py
+_tmp*.*
 .vscode
 
 config.py

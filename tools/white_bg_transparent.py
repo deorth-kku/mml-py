@@ -89,7 +89,7 @@ def _flood_from_border(mask: np.ndarray) -> np.ndarray:
 
 def to_transparent(src_path: str, dst_path: str,
                    sat_low: float = 3.0, sat_high: float = 25.0,
-                   white_mn: float = 230.0, dark_mn: float = 100.0,
+                   white_mn: float = 180.0, dark_mn: float = 100.0,
                    keep_enclosed: bool = True,
                    bg_alpha_thresh: float = 128.0) -> None:
     img = Image.open(src_path).convert("RGBA")
