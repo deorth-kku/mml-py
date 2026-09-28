@@ -32,12 +32,42 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 
 import numpy as np
 import soundfile as sf
 from scipy.fft import irfft, next_fast_len, rfft
 from scipy.signal import resample_poly
+
+
+# ---------------------------------------------------------------------------
+# 计时诊断
+# ---------------------------------------------------------------------------
+
+class _Timings:
+    """累计各阶段耗时，最后打印报告。"""
+
+    def __init__(self) -> None:
+        self.parts: dict[str, float] = {}
+
+    @contextmanager
+    def stage(self, name: str):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.parts[name] = self.parts.get(name, 0.0) + (time.perf_counter() - t0)
+
+    def report(self) -> None:
+        if not self.parts:
+            return
+        total = sum(self.parts.values())
+        print("耗时统计   :")
+        for name, t in sorted(self.parts.items(), key=lambda kv: -kv[1]):
+            print(f"  {name:<10s}: {t:6.2f} s ({t / total:5.1%})")
+        print(f"  {'合计':<10s}: {total:6.2f} s")
 
 
 # ---------------------------------------------------------------------------
@@ -88,30 +118,22 @@ def db(x: float) -> float:
     return 20.0 * np.log10(max(x, 1e-9))
 
 
-def trim_silence(y: np.ndarray, threshold_db: float = -40.0) -> np.ndarray:
-    """裁掉首尾静音（阈值相对峰值，按单声道混合判断）。"""
+def silence_bounds(y: np.ndarray, threshold_db: float = -40.0) -> tuple[int, int]:
+    """返回非静音区域 (start, end)（阈值相对峰值，按单声道混合判断）。
+
+    单遍扫描同时得到前导静音位置与裁剪边界。
+    """
     m = to_mono(y)
-    peak = float(np.max(np.abs(m))) if len(m) else 0.0
+    if len(m) == 0:
+        return 0, 0
+    peak = float(np.max(np.abs(m)))
     if peak <= 0:
-        return y
+        return 0, len(y)
     thresh = peak * 10.0 ** (threshold_db / 20.0)
     idx = np.nonzero(np.abs(m) > thresh)[0]
     if len(idx) == 0:
-        return y
-    return y[idx[0] : idx[-1] + 1]
-
-
-def leading_silence_samples(y: np.ndarray, threshold_db: float = -40.0) -> int:
-    """返回前导静音的样本数（按单声道混合判断）。"""
-    m = to_mono(y)
-    peak = float(np.max(np.abs(m))) if len(m) else 0.0
-    if peak <= 0:
-        return len(y)
-    thresh = peak * 10.0 ** (threshold_db / 20.0)
-    idx = np.nonzero(np.abs(m) > thresh)[0]
-    if len(idx) == 0:
-        return len(y)
-    return int(idx[0])
+        return 0, len(y)
+    return int(idx[0]), int(idx[-1]) + 1
 
 
 def _normalize(y: np.ndarray) -> np.ndarray:
@@ -137,7 +159,8 @@ def _fftconvolve(a: np.ndarray, b: np.ndarray, workers: int) -> np.ndarray:
 
 def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
                     coarse_sr: int = 8000, window_s: float = 3.0,
-                    margin_s: float = 1.0, workers: int = 0) -> float:
+                    margin_s: float = 1.0, workers: int = 0,
+                    timings: _Timings | None = None) -> float:
     """估计原唱与翻唱的时间偏移。
 
     返回偏移量（样本）：
@@ -151,12 +174,18 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
         workers = os.cpu_count() or 1
     orig = to_mono(orig)
     cover = to_mono(cover)
+
+    def _stage(name: str):
+        return timings.stage(name) if timings is not None else nullcontext()
+
     # ---- 粗搜：降采样后全长度互相关
     # 约定：corr[n] = sum_k a[k]*b[k+lag]，其中 lag = len(b)-1-n
     g = np.gcd(coarse_sr, sr)
-    oc = _normalize(resample_poly(orig, coarse_sr // g, sr // g))
-    cc = _normalize(resample_poly(cover, coarse_sr // g, sr // g))
-    corr = _fftconvolve(oc, cc[::-1], workers)
+    with _stage("粗搜降采样"):
+        oc = _normalize(resample_poly(orig, coarse_sr // g, sr // g))
+        cc = _normalize(resample_poly(cover, coarse_sr // g, sr // g))
+    with _stage("粗搜FFT"):
+        corr = _fftconvolve(oc, cc[::-1], workers)
     d_coarse = (len(cc) - 1) - int(np.argmax(corr))     # 粗采样率下的样本数
     d_coarse_s = d_coarse / coarse_sr
 
@@ -168,41 +197,51 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
     d_center = int(round(d_coarse_s * sr))
     margin = int(margin_s * sr)
 
-    # 3 个窗口共享同一段翻唱，其（反转后）FFT 只算一次（省 2/3 的翻唱 FFT）
-    # 注意：conv(w, c[::-1]) 是互相关，不能省掉反转
-    n_conv = win_n + len(c) - 1
-    nfft = next_fast_len(n_conv)
-    fc = rfft(c[::-1], nfft, workers=workers)
+    N = len(c)
 
-    # 3 路并行窗口均分线程，避免超额订阅
-    w_win = max(1, workers // 3)
+    with _stage("细搜FFT"):
+        # 3 路并行窗口均分线程，避免超额订阅
+        w_win = max(1, workers // 3)
 
-    def score_window(frac: float):
-        mid = int(len(orig) * frac)
-        start = max(0, mid - win_n // 2)
-        w = orig[start : start + win_n]
-        if len(w) < win_n // 2:
-            return None
-        w = _normalize(w)
-        # corr = convolve(w, c[::-1])，与原 fftconvolve(w, c[::-1], 'full') 完全一致
-        corr = irfft(rfft(w, nfft, workers=w_win) * fc,
-                     nfft, workers=w_win)[:n_conv]
-        lo = max(d_center - margin, -(len(w) - 1) - start)
-        hi = min(d_center + margin, len(c) - 1 - start)
-        if hi < lo:
-            return None
-        ds = np.arange(lo, hi + 1)
-        lags = ds + start
-        vals = corr[(len(c) - 1) - lags]
-        j = int(np.argmax(vals))
-        return float(vals[j]), int(ds[j])
+        def score_window(frac: float):
+            mid = int(len(orig) * frac)
+            start = max(0, mid - win_n // 2)
+            w = orig[start : start + win_n]
+            if len(w) < win_n // 2:
+                return None
+            w = _normalize(w)
+            lo = max(d_center - margin, -(win_n - 1) - start)
+            hi = min(d_center + margin, N - 1 - start)
+            if hi < lo:
+                return None
+            # 只需峰值可能落到的翻唱片段（两端补零），
+            # FFT 从全长缩到 ~(2*margin + 窗口) 长度
+            seg_start = lo + start
+            seg_end = hi + start + win_n
+            L = seg_end - seg_start
+            s = np.zeros(L)
+            a = max(seg_start, 0)
+            b = min(seg_end, N)
+            if b > a:
+                s[a - seg_start : b - seg_start] = c[a:b]
+            n_conv = win_n + L - 1
+            nfft = next_fast_len(n_conv)
+            # corr = convolve(w, s[::-1])（互相关），
+            # 与全长索引的映射：vals[ds] = corr[hi + win_n - 1 - ds]
+            corr = irfft(rfft(w, nfft, workers=w_win)
+                         * rfft(s[::-1], nfft, workers=w_win),
+                         nfft, workers=w_win)[:n_conv]
+            ds = np.arange(lo, hi + 1)
+            vals = corr[hi + win_n - 1 - ds]
+            j = int(np.argmax(vals))
+            return float(vals[j]), int(ds[j])
 
-    fracs = (0.3, 0.5, 0.7)
-    if workers > 1:
-        with ThreadPoolExecutor(max_workers=len(fracs)) as ex:
-            results = list(ex.map(score_window, fracs))
-    else:
-        results = [score_window(f) for f in fracs]
+        fracs = (0.3, 0.5, 0.7)
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=len(fracs)) as ex:
+                results = list(ex.map(score_window, fracs))
+        else:
+            results = [score_window(f) for f in fracs]
 
     best_score, best_d = -np.inf, d_center
     for r in results:
@@ -214,6 +253,19 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
 def shift_signal(y: np.ndarray, d: float) -> np.ndarray:
     """把信号移动 d 个样本（d>0 裁掉开头，d<0 开头补静音），支持小数样本。"""
     n = len(y)
+    di = int(round(d))
+    if di == d:
+        # 整数移位：切片精确等价且远快于 np.interp
+        if di == 0:
+            return y.copy()
+        if 0 < di < n:
+            return np.concatenate([np.zeros((di,) + y.shape[1:], dtype=y.dtype),
+                                   y[:-di]])
+        if -n < di < 0:
+            k = -di
+            return np.concatenate([y[k:],
+                                   np.zeros((k,) + y.shape[1:], dtype=y.dtype)])
+        return np.zeros_like(y)
     src = np.arange(n) - d
     if y.ndim == 1:
         out = np.interp(src, np.arange(n), y)
@@ -290,7 +342,7 @@ def _ffmpeg_available() -> bool:
 
 def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
                    n_orig: int, sr: int, gain: float,
-                   limit: float, out_path: str) -> None:
+                   limit: float, out_path: str, q: int = 0) -> None:
     """让 ffmpeg 直接对翻唱源按绝对偏移裁剪/补零、加增益、重采样到 sr 并编码 OGG。
 
     d_abs / n_orig 均为 sr 域；内部换算到输入采样率域（样本级精度）。
@@ -310,7 +362,7 @@ def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
         shift_f = f"aeval={exprs},atrim=end_sample={N},apad=whole_len={N}"
     af = f"{shift_f},volume={gain:.6f},alimiter=limit={limit}"
     cmd = ["ffmpeg", "-y", "-i", cover_path, "-af", af,
-           "-ar", str(sr), "-c:a", "libvorbis", "-q:a", "0", out_path]
+           "-ar", str(sr), "-c:a", "libvorbis", "-q:a", str(q), out_path]
     r = subprocess.run(cmd, capture_output=True)
     if r.returncode != 0:
         err = r.stderr.decode("utf-8", errors="replace")[-2000:]
@@ -320,57 +372,67 @@ def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
 def align(orig_path: str, cover_path: str, out_path: str,
           sr: int | None = None, mode: str = "global",
           trim: bool = True, limit: float = 0.995,
-          workers: int = 0) -> None:
+          workers: int = 0, q: int = 0) -> None:
+    timings = _Timings()
     if sr is None:
         sr = sf.info(orig_path).samplerate   # 默认匹配原唱采样率
     # 4ch 游戏源先混成立体声（直接叠加不减半），保证响度与游戏内播放一致
-    orig_full = mix_to_stereo(load_audio(orig_path, sr))
-    cover_full = mix_to_stereo(load_audio(cover_path, sr))
+    with timings.stage("读取原唱"):
+        orig_full = mix_to_stereo(load_audio(orig_path, sr))
+    with timings.stage("读取翻唱"):
+        cover_full = mix_to_stereo(load_audio(cover_path, sr))
     n_orig = len(orig_full)
 
-    if trim:
-        L_o = leading_silence_samples(orig_full)
-        L_c = leading_silence_samples(cover_full)
-        orig = trim_silence(orig_full)
-        cover = trim_silence(cover_full)
-    else:
-        L_o = L_c = 0
-        orig, cover = orig_full, cover_full
+    with timings.stage("静音裁剪"):
+        if trim:
+            lo_o, hi_o = silence_bounds(orig_full)
+            lo_c, hi_c = silence_bounds(cover_full)
+            orig = orig_full[lo_o:hi_o]
+            cover = cover_full[lo_c:hi_c]
+            L_o, L_c = lo_o, lo_c
+        else:
+            L_o = L_c = 0
+            orig, cover = orig_full, cover_full
 
     # 1) 偏移：裁剪域估计，再换算为两个输入文件的绝对偏移
     #    d_abs = d_trim + L_c - L_o（>0 表示翻唱整体晚于原唱）
-    d_trim = estimate_offset(orig, cover, sr, workers=workers)
+    with timings.stage("偏移估计"):
+        d_trim = estimate_offset(orig, cover, sr, workers=workers,
+                                 timings=timings)
     d_abs = d_trim + L_c - L_o
 
     # 2) 音量匹配（裁剪域，对齐后的翻唱）
-    aligned = shift_signal(cover, -d_trim)
-    n = len(orig)
-    if len(aligned) < n:
-        pad = np.zeros((n - len(aligned), aligned.shape[1]))
-        aligned = np.concatenate([aligned, pad])
-    else:
-        aligned = aligned[:n]
-    if mode == "global":
-        aligned, info = match_level_global(orig, aligned)
-    else:
-        aligned, info = match_level_dynamic(orig, aligned, sr)
+    with timings.stage("移位+音量"):
+        aligned = shift_signal(cover, -d_trim)
+        n = len(orig)
+        if len(aligned) < n:
+            pad = np.zeros((n - len(aligned), aligned.shape[1]))
+            aligned = np.concatenate([aligned, pad])
+        else:
+            aligned = aligned[:n]
+        if mode == "global":
+            aligned, info = match_level_global(orig, aligned)
+        else:
+            aligned, info = match_level_dynamic(orig, aligned, sr)
 
     # 3) 输出：放在原唱文件的绝对时间轴上（长度 = 原唱完整时长）
     use_ffmpeg = (mode == "global"
                   and out_path.lower().endswith((".ogg", ".oga"))
                   and _ffmpeg_available())
-    if use_ffmpeg:
-        cover_sr = sf.info(cover_path).samplerate
-        _ffmpeg_encode(cover_path, cover_sr, d_abs, n_orig, sr,
-                       float(info), limit, out_path)
-        out, clipped = None, False
-    else:
-        out = np.zeros((n_orig, cover_full.shape[1]))
-        out[L_o : L_o + n] = aligned
-        out, clipped = soft_clip(out, limit)
-        sf.write(out_path, out.astype(np.float32), sr)
+    with timings.stage("输出编码"):
+        if use_ffmpeg:
+            cover_sr = sf.info(cover_path).samplerate
+            _ffmpeg_encode(cover_path, cover_sr, d_abs, n_orig, sr,
+                           float(info), limit, out_path, q)
+            out, clipped = None, False
+        else:
+            out = np.zeros((n_orig, cover_full.shape[1]))
+            out[L_o : L_o + n] = aligned
+            out, clipped = soft_clip(out, limit)
+            sf.write(out_path, out.astype(np.float32), sr)
 
     # 报告
+    timings.report()
     print(f"采样率     : {sr} Hz（匹配原唱）")
     ch_out = out.shape[1] if out is not None else cover_full.shape[1]
     print(f"声道       : 原唱 {orig_full.shape[1]} → 输出 {ch_out}")
@@ -454,6 +516,8 @@ def main() -> None:
     ap.add_argument("--no-limit", action="store_true", help="禁用峰值保护")
     ap.add_argument("--workers", type=int, default=0,
                     help="FFT 线程数（0 = 全部核心，默认）")
+    ap.add_argument("-q", type=int, default=10,
+                    help="OGG vorbis 质量 0-10（默认 0；调低更快更小）")
     ap.add_argument("--selftest", action="store_true", help="用合成信号自测算法")
     args = ap.parse_args()
 
@@ -467,7 +531,7 @@ def main() -> None:
           sr=args.sr, mode=args.mode,
           trim=not args.no_trim,
           limit=0.995 if not args.no_limit else 1.0,
-          workers=args.workers)
+          workers=args.workers, q=args.q)
 
 
 if __name__ == "__main__":
