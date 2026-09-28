@@ -9,6 +9,8 @@
    - 细搜：从原唱取多个 3 秒窗口与翻唱互相关，在粗偏移 ±1 秒范围内
      搜索 → 样本级精度的偏移
    - 前提：两者使用同一伴奏轨（音乐部分高度相关，人声差异不影响）
+   - 加速：FFT 多线程（scipy.fft workers）、3 个细搜窗口并行、
+     翻唱 FFT 只算一次（--workers 控制线程数）
 2. 音量匹配
    - global  ：单一增益 = RMS(原唱) / RMS(翻唱)
    - dynamic ：1 秒帧 RMS 增益，移动平均平滑后插值到逐样本增益，
@@ -29,10 +31,13 @@
 from __future__ import annotations
 
 import argparse
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import fftconvolve, resample_poly
+from scipy.fft import irfft, next_fast_len, rfft
+from scipy.signal import resample_poly
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +123,32 @@ def _normalize(y: np.ndarray) -> np.ndarray:
 # 偏移估计
 # ---------------------------------------------------------------------------
 
+def _fftconvolve(a: np.ndarray, b: np.ndarray, workers: int) -> np.ndarray:
+    """FFT 域全卷积（等价于 scipy.signal.fftconvolve, mode='full'）。
+
+    直接走 scipy.fft 以便传入 workers 多线程。
+    """
+    n = len(a) + len(b) - 1
+    nfft = next_fast_len(n)
+    fa = rfft(a, nfft, workers=workers)
+    fb = rfft(b, nfft, workers=workers)
+    return irfft(fa * fb, nfft, workers=workers)[:n]
+
+
 def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
                     coarse_sr: int = 8000, window_s: float = 3.0,
-                    margin_s: float = 1.0) -> float:
+                    margin_s: float = 1.0, workers: int = 0) -> float:
     """估计原唱与翻唱的时间偏移。
 
     返回偏移量（样本）：
       d > 0 → 翻唱比原唱晚 d 个样本（需裁掉翻唱开头 d 个样本）
       d < 0 → 翻唱比原唱早（需在翻唱开头补 |d| 个样本静音）
+
+    workers：FFT 线程数（0 = 全部核心）。3 个细搜窗口相互独立，
+    也并行计算，翻唱 FFT 只算一次供 3 个窗口共享。
     """
+    if workers <= 0:
+        workers = os.cpu_count() or 1
     orig = to_mono(orig)
     cover = to_mono(cover)
     # ---- 粗搜：降采样后全长度互相关
@@ -134,7 +156,7 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
     g = np.gcd(coarse_sr, sr)
     oc = _normalize(resample_poly(orig, coarse_sr // g, sr // g))
     cc = _normalize(resample_poly(cover, coarse_sr // g, sr // g))
-    corr = fftconvolve(oc, cc[::-1], mode="full")
+    corr = _fftconvolve(oc, cc[::-1], workers)
     d_coarse = (len(cc) - 1) - int(np.argmax(corr))     # 粗采样率下的样本数
     d_coarse_s = d_coarse / coarse_sr
 
@@ -145,25 +167,47 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
     win_n = int(window_s * sr)
     d_center = int(round(d_coarse_s * sr))
     margin = int(margin_s * sr)
-    best_score, best_d = -np.inf, d_center
-    for frac in (0.3, 0.5, 0.7):
+
+    # 3 个窗口共享同一段翻唱，其（反转后）FFT 只算一次（省 2/3 的翻唱 FFT）
+    # 注意：conv(w, c[::-1]) 是互相关，不能省掉反转
+    n_conv = win_n + len(c) - 1
+    nfft = next_fast_len(n_conv)
+    fc = rfft(c[::-1], nfft, workers=workers)
+
+    # 3 路并行窗口均分线程，避免超额订阅
+    w_win = max(1, workers // 3)
+
+    def score_window(frac: float):
         mid = int(len(orig) * frac)
         start = max(0, mid - win_n // 2)
         w = orig[start : start + win_n]
         if len(w) < win_n // 2:
-            continue
+            return None
         w = _normalize(w)
-        corr = fftconvolve(w, c[::-1], mode="full")
+        # corr = convolve(w, c[::-1])，与原 fftconvolve(w, c[::-1], 'full') 完全一致
+        corr = irfft(rfft(w, nfft, workers=w_win) * fc,
+                     nfft, workers=w_win)[:n_conv]
         lo = max(d_center - margin, -(len(w) - 1) - start)
         hi = min(d_center + margin, len(c) - 1 - start)
         if hi < lo:
-            continue
+            return None
         ds = np.arange(lo, hi + 1)
         lags = ds + start
         vals = corr[(len(c) - 1) - lags]
         j = int(np.argmax(vals))
-        if vals[j] > best_score:
-            best_score, best_d = float(vals[j]), int(ds[j])
+        return float(vals[j]), int(ds[j])
+
+    fracs = (0.3, 0.5, 0.7)
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=len(fracs)) as ex:
+            results = list(ex.map(score_window, fracs))
+    else:
+        results = [score_window(f) for f in fracs]
+
+    best_score, best_d = -np.inf, d_center
+    for r in results:
+        if r is not None and r[0] > best_score:
+            best_score, best_d = r
     return float(best_d)
 
 
@@ -275,7 +319,8 @@ def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
 
 def align(orig_path: str, cover_path: str, out_path: str,
           sr: int | None = None, mode: str = "global",
-          trim: bool = True, limit: float = 0.995) -> None:
+          trim: bool = True, limit: float = 0.995,
+          workers: int = 0) -> None:
     if sr is None:
         sr = sf.info(orig_path).samplerate   # 默认匹配原唱采样率
     # 4ch 游戏源先混成立体声（直接叠加不减半），保证响度与游戏内播放一致
@@ -294,7 +339,7 @@ def align(orig_path: str, cover_path: str, out_path: str,
 
     # 1) 偏移：裁剪域估计，再换算为两个输入文件的绝对偏移
     #    d_abs = d_trim + L_c - L_o（>0 表示翻唱整体晚于原唱）
-    d_trim = estimate_offset(orig, cover, sr)
+    d_trim = estimate_offset(orig, cover, sr, workers=workers)
     d_abs = d_trim + L_c - L_o
 
     # 2) 音量匹配（裁剪域，对齐后的翻唱）
@@ -407,6 +452,8 @@ def main() -> None:
                     help="音量匹配模式：global=单一增益，dynamic=逐帧增益（默认 global）")
     ap.add_argument("--no-trim", action="store_true", help="不裁剪首尾静音")
     ap.add_argument("--no-limit", action="store_true", help="禁用峰值保护")
+    ap.add_argument("--workers", type=int, default=0,
+                    help="FFT 线程数（0 = 全部核心，默认）")
     ap.add_argument("--selftest", action="store_true", help="用合成信号自测算法")
     args = ap.parse_args()
 
@@ -419,7 +466,8 @@ def main() -> None:
           args.output or "cover_aligned.wav",
           sr=args.sr, mode=args.mode,
           trim=not args.no_trim,
-          limit=0.995 if not args.no_limit else 1.0)
+          limit=0.995 if not args.no_limit else 1.0,
+          workers=args.workers)
 
 
 if __name__ == "__main__":
