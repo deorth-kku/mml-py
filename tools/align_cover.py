@@ -160,7 +160,8 @@ def _fftconvolve(a: np.ndarray, b: np.ndarray, workers: int) -> np.ndarray:
 def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
                     coarse_sr: int = 8000, window_s: float = 3.0,
                     margin_s: float = 1.0, workers: int = 0,
-                    timings: _Timings | None = None) -> float:
+                    timings: _Timings | None = None,
+                    center_override: float | None = None) -> float:
     """估计原唱与翻唱的时间偏移。
 
     返回偏移量（样本）：
@@ -180,21 +181,27 @@ def estimate_offset(orig: np.ndarray, cover: np.ndarray, sr: int,
 
     # ---- 粗搜：降采样后全长度互相关
     # 约定：corr[n] = sum_k a[k]*b[k+lag]，其中 lag = len(b)-1-n
-    g = np.gcd(coarse_sr, sr)
-    with _stage("粗搜降采样"):
-        oc = _normalize(resample_poly(orig, coarse_sr // g, sr // g))
-        cc = _normalize(resample_poly(cover, coarse_sr // g, sr // g))
-    with _stage("粗搜FFT"):
-        corr = _fftconvolve(oc, cc[::-1], workers)
-    d_coarse = (len(cc) - 1) - int(np.argmax(corr))     # 粗采样率下的样本数
-    d_coarse_s = d_coarse / coarse_sr
+    # 若指定 center_override 则跳过粗搜（直接用给定中心）
+    d_coarse_s = 0.0
+    if center_override is None:
+        g = np.gcd(coarse_sr, sr)
+        with _stage("粗搜降采样"):
+            oc = _normalize(resample_poly(orig, coarse_sr // g, sr // g))
+            cc = _normalize(resample_poly(cover, coarse_sr // g, sr // g))
+        with _stage("粗搜FFT"):
+            corr = _fftconvolve(oc, cc[::-1], workers)
+        d_coarse = (len(cc) - 1) - int(np.argmax(corr))     # 粗采样率下的样本数
+        d_coarse_s = d_coarse / coarse_sr
 
     # ---- 细搜：在粗偏移 ±margin_s 范围内做样本级精度搜索
     # 窗口 w 从原唱 start 处截取；正确对齐时 w 匹配翻唱中 start+d 处内容，
     # 故相关峰值位于 lag = d + start，真实偏移 d = lag_peak - start
     c = _normalize(cover)
     win_n = int(window_s * sr)
-    d_center = int(round(d_coarse_s * sr))
+    if center_override is not None:
+        d_center = int(round(center_override * sr))
+    else:
+        d_center = int(round(d_coarse_s * sr))
     margin = int(margin_s * sr)
 
     N = len(c)
@@ -357,9 +364,11 @@ def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
         shift_f = f"atrim=start_sample={D}:end_sample={D + N},apad=whole_len={D + N}"
     else:
         # 开头补 |D| 个样本静音（样本级精度）
+        # aeval 的表达式是位置参数（exprs 列表），没有 c0/c1 命名选项；
+        # 各声道偏移相同，给单个表达式即可应用到所有声道。
         P = -D
-        exprs = ":".join(f"c{i}='if(lt(n,{P}),0,src(n-{P}))'" for i in range(ch))
-        shift_f = f"aeval={exprs},atrim=end_sample={N},apad=whole_len={N}"
+        shift_f = (f"aeval='if(lt(n,{P}),0,src(n-{P}))',"
+                   f"atrim=end_sample={N},apad=whole_len={N}")
     af = f"{shift_f},volume={gain:.6f},alimiter=limit={limit}"
     cmd = ["ffmpeg", "-y", "-i", cover_path, "-af", af,
            "-ar", str(sr), "-c:a", "libvorbis", "-q:a", str(q), out_path]
@@ -372,7 +381,9 @@ def _ffmpeg_encode(cover_path: str, cover_sr: int, d_abs: float,
 def align(orig_path: str, cover_path: str, out_path: str,
           sr: int | None = None, mode: str = "global",
           trim: bool = True, limit: float = 0.995,
-          workers: int = 0, q: int = 0) -> None:
+          workers: int = 0, q: int = 0,
+          coarse_sr: int = 8000,
+          center: float | None = None, margin: float = 1.0) -> None:
     timings = _Timings()
     if sr is None:
         sr = sf.info(orig_path).samplerate   # 默认匹配原唱采样率
@@ -398,7 +409,8 @@ def align(orig_path: str, cover_path: str, out_path: str,
     #    d_abs = d_trim + L_c - L_o（>0 表示翻唱整体晚于原唱）
     with timings.stage("偏移估计"):
         d_trim = estimate_offset(orig, cover, sr, workers=workers,
-                                 timings=timings)
+                                 timings=timings, coarse_sr=coarse_sr,
+                                 center_override=center, margin_s=margin)
     d_abs = d_trim + L_c - L_o
 
     # 2) 音量匹配（裁剪域，对齐后的翻唱）
@@ -516,6 +528,12 @@ def main() -> None:
     ap.add_argument("--no-limit", action="store_true", help="禁用峰值保护")
     ap.add_argument("--workers", type=int, default=0,
                     help="FFT 线程数（0 = 全部核心，默认）")
+    ap.add_argument("--coarse-sr", type=int, default=8000,
+                    help="粗搜降采样率（Hz，越大 FFT 采样数越多、分辨率越高，默认 8000）")
+    ap.add_argument("--center", type=float, default=None,
+                    help="强制细搜中心偏移（秒，跳过粗搜；默认用粗搜结果）")
+    ap.add_argument("--margin", type=float, default=1.0,
+                    help="细搜搜索半径（秒，默认 1.0）")
     ap.add_argument("-q", type=int, default=10,
                     help="OGG vorbis 质量 0-10（默认 0；调低更快更小）")
     ap.add_argument("--selftest", action="store_true", help="用合成信号自测算法")
@@ -531,7 +549,9 @@ def main() -> None:
           sr=args.sr, mode=args.mode,
           trim=not args.no_trim,
           limit=0.995 if not args.no_limit else 1.0,
-          workers=args.workers, q=args.q)
+          workers=args.workers, q=args.q,
+          coarse_sr=args.coarse_sr,
+          center=args.center, margin=args.margin)
 
 
 if __name__ == "__main__":
