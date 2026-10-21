@@ -6,7 +6,7 @@ import argparse
 import io
 import numpy as np
 from PIL import Image
-from texture2ddecoder import decode_bc1, decode_bc3
+from texture2ddecoder import decode_bc1, decode_bc3, decode_bc5
 from collections.abc import Generator
 from functools import cached_property
 
@@ -350,12 +350,19 @@ class SubTexture:
 
 def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int) -> Image.Image:
     """Decode DXT compressed data and return a PIL Image (RGBA)."""
-    if format_id == 6:  # DXT1 = BC1 (no alpha channel, but decode_bc1 returns RGBA anyway)
+    if format_id == 1:  # RGB8 uncompressed (3 bytes/pixel, no alpha)
+        rgb_array = np.frombuffer(dxt_data, dtype=np.uint8).reshape((height, width, 3))
+        rgba_array = np.dstack([rgb_array, np.full((height, width), 255, dtype=np.uint8)])
+        return Image.fromarray(rgba_array)
+    elif format_id == 2:  # RGBA8 uncompressed (already in RGBA order, no swap)
+        rgba_array = np.frombuffer(dxt_data, dtype=np.uint8).reshape((height, width, 4))
+        return Image.fromarray(rgba_array)
+    elif format_id == 6:  # DXT1 = BC1
         rgba_bytes = decode_bc1(dxt_data, width, height)
-    elif format_id == 9:  # DXT5 = BC3 (with alpha channel)
+    elif format_id == 9:  # DXT5 = BC3
         rgba_bytes = decode_bc3(dxt_data, width, height)
-    elif format_id == 2:  # RGBA8 uncompressed
-        rgba_bytes = dxt_data
+    elif format_id == 11:  # ATI2 = BC5 (plain, not YCbCr)
+        rgba_bytes = decode_bc5(dxt_data, width, height)
     else:
         raise ValueError(f'Unsupported DXT format: {format_id}')
     
@@ -370,7 +377,6 @@ def decode_dxt_to_image(dxt_data: bytes, width: int, height: int, format_id: int
     img = Image.fromarray(rgba_array)
     
     return img
-
 
 class Texture:
     def __init__(self):
@@ -430,8 +436,66 @@ class Texture:
         if (len(self.subtextures) > 0 and len(self.subtextures[0]) > 0 and 
             self.subtextures[0][0] is not None):
             st = self.subtextures[0][0]
+            # ATI2 (format 11) with a second half-res subtexture = YCbCr
+            if st.format == 11 and self._has_chroma():
+                return self._decode_ycbcr()
             return decode_dxt_to_image(st.data, st.width, st.height, st.format)
         return None
+
+    def _has_chroma(self) -> bool:
+        """Check if this ATI2 texture has a chroma subtexture (YCbCr encoding)."""
+        # Chroma is stored as subtextures[1][0] (array) or subtextures[0][1] (mip slot)
+        if self.array_size > 1 and len(self.subtextures) > 1 and self.subtextures[1][0] is not None:
+            return True
+        if self.mip_count > 1 and len(self.subtextures[0]) > 1 and self.subtextures[0][1] is not None:
+            st1 = self.subtextures[0][1]
+            # Chroma should be half resolution
+            if st1.width == self.subtextures[0][0].width // 2:
+                return True
+        return False
+
+    def _get_chroma_st(self):
+        """Get the chroma SubTexture from a YCbCr ATI2 texture."""
+        if self.array_size > 1 and len(self.subtextures) > 1 and self.subtextures[1][0] is not None:
+            return self.subtextures[1][0]
+        return self.subtextures[0][1]
+
+    def _decode_ycbcr(self) -> Image.Image:
+        """Decode ATI2/YCbCr texture from luminance + chroma BC5 subtextures."""
+        lum_st = self.subtextures[0][0]
+        chr_st = self._get_chroma_st()
+
+        # Decode both as BC5 → RGBA bytes (R=ch0, G=ch1, B=255, A=255)
+        lum_rgba = np.frombuffer(decode_bc5(lum_st.data, lum_st.width, lum_st.height),
+                                  dtype=np.uint8).reshape(lum_st.height, lum_st.width, 4)
+        chr_rgba = np.frombuffer(decode_bc5(chr_st.data, chr_st.width, chr_st.height),
+                                  dtype=np.uint8).reshape(chr_st.height, chr_st.width, 4)
+
+        H, W = lum_st.height, lum_st.width
+
+        # decode_bc5 returns R=0, G=ch0, B=ch1, A=255
+        # In this TXP format: ch0 = A (alpha), ch1 = Y (luminance)
+        A = lum_rgba[:, :, 1].astype(np.float64) / 255.0   # G = ch0 = A
+        Y = lum_rgba[:, :, 2].astype(np.float64) / 255.0   # B = ch1 = Y
+
+        # Upscale chroma to full resolution (nearest neighbor)
+        ys = np.arange(H) // 2
+        xs = np.arange(W) // 2
+        Cr = chr_rgba[ys[:, None], xs[None, :], 1].astype(np.float64) / 255.0  # G = ch0 = Cr
+        Cb = chr_rgba[ys[:, None], xs[None, :], 2].astype(np.float64) / 255.0  # B = ch1 = Cb
+
+        # YCbCr → RGB (same formula as MikuMikuLibrary C++)
+        cb = Cb * 1.003922 - 0.503929
+        cr = Cr * 1.003922 - 0.503929
+
+        r = np.clip(Y + 1.5748 * cr, 0.0, 1.0)
+        g = np.clip(Y + -0.1873 * cb + -0.4681 * cr, 0.0, 1.0)
+        b = np.clip(Y + 1.8556 * cb, 0.0, 1.0)
+        a = np.clip(A, 0.0, 1.0)
+
+        rgba = np.dstack([r, g, b, a])
+        rgba = np.clip(rgba * 255, 0, 255).astype(np.uint8)
+        return Image.fromarray(rgba)
 
 
 class TextureSet:
