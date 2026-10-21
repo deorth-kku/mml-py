@@ -2,7 +2,7 @@
 
 Usage:
     python upgrade_farc_cli.py <src_pv> <dst_pv> [--logo logo.png] [--bg bg.png]
-                              [--bg-jk-format {dxt5,rgb8}]
+                              [--bg-jk-format {dxt5,rgb8,rgba8,bc5}]
 
 Examples:
     python upgrade_farc_cli.py 874 1874
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from atlas_builder import BG_JK_FORMAT_IDS
 import pv_insert
 
 
@@ -27,9 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--logo', help='PNG file to use as LOGO, overriding the extracted one.')
     parser.add_argument('--bg', help='PNG file to use as BG, overriding the extracted one.')
     parser.add_argument('--bg-jk-format', default='dxt5',
-                        choices=['dxt5', 'rgb8'],
+                        choices=sorted(BG_JK_FORMAT_IDS),
                         help='Encoding for the merged BG+JK texture (default: dxt5). '
-                             'rgb8 = uncompressed RGB8 (no alpha).')
+                             'dxt5=DXT5/BC3, rgb8=uncompressed RGB8 (no alpha), '
+                             'rgba8=uncompressed RGBA8 (has alpha), '
+                             'bc5=BC5/ATI2 (2x 4-bit channels, no alpha).')
 
     args = parser.parse_args(argv)
 

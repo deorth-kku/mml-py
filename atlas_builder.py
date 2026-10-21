@@ -62,8 +62,18 @@ class AtlasInfo(NamedTuple):
 # Supported encodings for the merged BG+JK atlas (texture 0), mapped to the
 # TXP SubTexture format ID. Extend this dict to add new formats.
 BG_JK_FORMAT_IDS = {
-    "dxt5": 9,   # DXT5 / BC3 (lossy, has alpha)
-    "rgb8": 1,   # RGB8 uncompressed (3 bytes/pixel, no alpha)
+    "dxt5": 9,    # DXT5 / BC3 (lossy, has alpha)
+    "rgb8": 1,    # RGB8 uncompressed (3 bytes/pixel, no alpha)
+    "rgba8": 2,   # RGBA8 uncompressed (4 bytes/pixel, has alpha)
+    "bc5":  11,   # BC5 / ATI2 (lossy, 2x 4-bit channels, no alpha)
+}
+
+# For the compressed (texconv-encoded) formats: key -> (texconv -f flag,
+# expected DDS FourCC as a little-endian uint32).
+#   DXT5 = "DXT5" (0x35545844), ATI2 = "ATI2" (0x32495441)
+BG_JK_TEXCONV = {
+    "dxt5": ("BC3_UNORM", 0x35545844),
+    "bc5":  ("BC5_UNORM", 0x32495441),
 }
 
 
@@ -168,9 +178,13 @@ def parse_dds(
     dds_path: str,
     expected_w: int | None = None,
     expected_h: int | None = None,
-    expected_fourcc: bytes = b"DXT5",
+    expected_fourcc: int = 0x35545844,  # DXT5
 ) -> tuple[int, int, bytes]:
-    """Parse a DDS file. Returns (width, height, raw_payload_bytes)."""
+    """Parse a DDS file. Returns (width, height, raw_payload_bytes).
+
+    ``expected_fourcc`` is the FourCC as a little-endian uint32
+    (DXT5 = 0x35545844, ATI2 = 0x32495441).
+    """
     with open(dds_path, "rb") as f:
         data = f.read()
 
@@ -182,15 +196,15 @@ def parse_dds(
 
     height, width, _ = struct.unpack_from("<III", data, 12)
     four_cc_int = struct.unpack_from("<I", data, 84)[0]
-    # DXT5 = BC3_UNORM, FourCC as integer: 0x35545844 ("DXT5" as LE uint32)
-    DXT5_FOURCC = 0x35545844
 
     if expected_w is not None and width != expected_w:
         raise ValueError(f"DDS width {width} != expected {expected_w}")
     if expected_h is not None and height != expected_h:
         raise ValueError(f"DDS height {height} != expected {expected_h}")
-    if four_cc_int != DXT5_FOURCC:
-        raise ValueError(f"DDS FourCC 0x{four_cc_int:08X} != expected DXT5 (0x{DXT5_FOURCC:08X})")
+    if four_cc_int != expected_fourcc:
+        raise ValueError(
+            f"DDS FourCC 0x{four_cc_int:08X} != expected 0x{expected_fourcc:08X}"
+        )
 
     payload = data[128:]
     expected_size = math.ceil(width / 4) * math.ceil(height / 4) * 16
@@ -231,8 +245,8 @@ def build_atlas(
         vflip: Whether to apply vertical flip during encoding.
         sprite_name_suffix: Suffix appended to the SONG_* sprite names.
         bg_jk_format: Encoding for the merged BG+JK atlas (texture 0).
-            One of the keys in ``BG_JK_FORMAT_IDS`` (``"dxt5"``, ``"rgb8"``).
-            The LOGO atlas is always DXT5.
+            One of the keys in ``BG_JK_FORMAT_IDS`` (``"dxt5"``, ``"rgb8"``,
+            ``"rgba8"``). The LOGO atlas is always DXT5.
 
     Returns:
         AtlasInfo with payloads and placement data for all three sprites.
@@ -281,9 +295,6 @@ def build_atlas(
     bg_jk_fmt_id = BG_JK_FORMAT_IDS[bg_jk_key]
 
     # Encode BG atlas (contains BG + JK)
-    bg_png = os.path.join(dds_out_dir, "atlas_bg.png")
-    bg_atlas.save(bg_png)
-
     if bg_jk_key == "rgb8":
         # RGB8: raw 3-bytes/pixel, no alpha. Stored vertically flipped
         # (upside-down) to match the DXT5 storage convention, so that the
@@ -292,10 +303,29 @@ def build_atlas(
         bg_payload = bg_atlas.convert("RGB").transpose(
             Image.Transpose.FLIP_TOP_BOTTOM
         ).tobytes()
+    elif bg_jk_key == "rgba8":
+        # RGBA8: raw 4-bytes/pixel (RGBA order, no channel swap). Stored
+        # vertically flipped (upside-down) to match the DXT5 storage
+        # convention, so that the parser's crop_from_texture() vertical flip
+        # restores upright.
+        bg_w, bg_h = bg_atlas.size
+        bg_payload = bg_atlas.convert("RGBA").transpose(
+            Image.Transpose.FLIP_TOP_BOTTOM
+        ).tobytes()
     else:
-        # DXT5 (BC3) via texconv
-        bg_dds = _encode_png_to_dds(bg_png, dds_out_dir, vflip=vflip)
-        bg_w, bg_h, bg_payload = parse_dds(bg_dds)
+        # Compressed (DXT5/BC3 or BC5/ATI2) via texconv.
+        #
+        # BC5 channel mapping (verified empirically): texconv stores
+        #   ch0 = input G, ch1 = input R (input B is dropped, A = 255).
+        # decode_bc5 then returns R=0, G=ch0, B=ch1, and the parser applies a
+        # R<->B swap, so the game ends up seeing R=input R, G=input G, B=0.
+        # Feeding the original atlas is therefore already correct -- no
+        # pre-swap is needed.
+        texconv_flag, fourcc = BG_JK_TEXCONV[bg_jk_key]
+        bg_png = os.path.join(dds_out_dir, "atlas_bg.png")
+        bg_atlas.save(bg_png)
+        bg_dds = _encode_png_to_dds(bg_png, dds_out_dir, fmt=texconv_flag, vflip=vflip)
+        bg_w, bg_h, bg_payload = parse_dds(bg_dds, expected_fourcc=fourcc)
 
     # Encode LOGO atlas (always DXT5)
     logo_png = os.path.join(dds_out_dir, "atlas_logo.png")

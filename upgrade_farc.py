@@ -20,6 +20,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from atlas_builder import BG_JK_FORMAT_IDS
 from pack_sprite_selection import build_sprite_selection_farc
 from txp_parser import export_sprites_to_png
 
@@ -147,9 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--logo', help='PNG file to use as LOGO, overriding the extracted one.')
     parser.add_argument('--bg', help='PNG file to use as BG, overriding the extracted one.')
     parser.add_argument('--bg-jk-format', default='dxt5',
-                        choices=['dxt5', 'rgb8'],
+                        choices=sorted(BG_JK_FORMAT_IDS),
                         help='Encoding for the merged BG+JK texture (default: dxt5). '
-                             'rgb8 = uncompressed RGB8 (no alpha).')
+                             'dxt5=DXT5/BC3, rgb8=uncompressed RGB8 (no alpha), '
+                             'rgba8=uncompressed RGBA8 (has alpha), '
+                             'bc5=BC5/ATI2 (2x 4-bit channels, no alpha).')
 
     args = parser.parse_args(argv)
 
