@@ -190,13 +190,38 @@ class FarcArchive:
         data = f.read(entry.compressed_size)
         
         if entry.is_compressed:
-            import gzip
-            try:
-                data = gzip.decompress(data)
-            except Exception as e:
-                print(f"  GZip decompression failed for {entry.name}: {e}")
+            data = self._decompress_gzip_tolerant(data, entry.name)
         
         return data
+
+    @staticmethod
+    def _decompress_gzip_tolerant(data: bytes, name: str) -> bytes:
+        """Decompress GZip data, tolerating trailing padding bytes."""
+        import zlib
+        try:
+            # Parse GZip header to find deflate stream start
+            idx = 10
+            flags = data[3]
+            if flags & 0x04:  # FEXTRA
+                xlen = data[10] | (data[11] << 8)
+                idx = 12 + xlen
+            if flags & 0x02:  # FCOMMENT
+                while idx < len(data) and data[idx] != 0:
+                    idx += 1
+                idx += 1
+            if flags & 0x08:  # FNAME
+                while idx < len(data) and data[idx] != 0:
+                    idx += 1
+                idx += 1
+            
+            # Raw deflate decompress (ignores GZip trailer + any padding)
+            d = zlib.decompressobj(-15)
+            out = d.decompress(data[idx:])
+            out += d.flush()
+            return out
+        except Exception as e:
+            print(f"  Decompression failed for {name}: {e}")
+            return data
 
 
 # TextureFormat enum mapping from C# MikuMikuLibrary

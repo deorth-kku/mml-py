@@ -1,6 +1,8 @@
 from txp_parser import SpriteSet_from_file
 import os,sys
-import re
+from config import batch_export_skip as skip
+
+
 
 
 def findpv(file:str)->str:
@@ -20,11 +22,19 @@ if __name__ == "__main__":
             if pv==None:
                 print(f"cannot find pv name in {file}")
                 continue
-            elif pv=="pvtmb":
-                continue
             
             full=os.path.join(root,file)
-            sprite_img=None                                                                                                                         
+
+            use_skip=False
+            for name in skip:
+                if name in full:
+                    use_skip=True
+                    break
+            if use_skip:
+                continue
+
+            sprite_img=None 
+            print(f"start extracting {full}")                                                                                                                        
             for sprite,img in SpriteSet_from_file(full):
                 if "JK" in sprite.name:                                               
                     sprite_img=img
