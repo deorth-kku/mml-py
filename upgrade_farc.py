@@ -32,6 +32,7 @@ def upgrade_farc(
     resolution_mode: int = 14,
     logo_path: str | None = None,
     bg_path: str | None = None,
+    bg_jk_format: str = "dxt5",
 ) -> str:
     """Upgrade a Sprite Selection FARC archive.
 
@@ -45,6 +46,9 @@ def upgrade_farc(
             the one extracted from the source FARC.
         bg_path: Optional path to a PNG file to use as the BG, overriding
             the one extracted from the source FARC.
+        bg_jk_format: Encoding for the merged BG+JK texture. One of the keys
+            in ``atlas_builder.BG_JK_FORMAT_IDS`` (``"dxt5"``, ``"rgb8"``).
+            ``"rgb8"`` stores the texture as uncompressed RGB8 (no alpha).
 
     Returns:
         Path to the generated .farc file.
@@ -122,6 +126,7 @@ def upgrade_farc(
             pv=pv,
             output_dir=output_dir,
             resolution_mode=resolution_mode,
+            bg_jk_format=bg_jk_format,
         )
 
         print(f'Wrote {output}')
@@ -141,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
                         help='Resolution mode (default: 14=HDTV1080).')
     parser.add_argument('--logo', help='PNG file to use as LOGO, overriding the extracted one.')
     parser.add_argument('--bg', help='PNG file to use as BG, overriding the extracted one.')
+    parser.add_argument('--bg-jk-format', default='dxt5',
+                        choices=['dxt5', 'rgb8'],
+                        help='Encoding for the merged BG+JK texture (default: dxt5). '
+                             'rgb8 = uncompressed RGB8 (no alpha).')
 
     args = parser.parse_args(argv)
 
@@ -153,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             resolution_mode=args.resolution_mode,
             logo_path=args.logo,
             bg_path=args.bg,
+            bg_jk_format=args.bg_jk_format,
         )
         return 0
     except Exception as e:

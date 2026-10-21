@@ -125,7 +125,7 @@ def serialize_pv_db(db: dict[str, list[str]], filepath: str) -> None:
                 f.write("\n")
 
 
-def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None) -> str:
+def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, bg_jk_format: str = "dxt5") -> str:
     """Upgrade the sprite selection farc archive for the new PV."""
     from upgrade_farc import upgrade_farc as run_upgrade_farc
 
@@ -145,6 +145,7 @@ def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None,
         pv=dst_pv,
         logo_path=logo_path,
         bg_path=bg_path,
+        bg_jk_format=bg_jk_format,
     )
     print(f"  Done: {dst_farc}")
     return dst_farc
@@ -201,11 +202,11 @@ def copy_pv_assets(src_pv: str, dst_pv: str) -> None:
     print(f"Done: copied 1 ogg + {dsc_count} dsc files.")
 
 
-def do_farc_upgrade(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None) -> None:
+def do_farc_upgrade(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, bg_jk_format: str = "dxt5") -> None:
     """Upgrade the sprite selection farc archive."""
     print()
     print("--- FARC Upgrade ---")
-    upgrade_farc_archive(src_pv, dst_pv, logo_path=logo_path, bg_path=bg_path)
+    upgrade_farc_archive(src_pv, dst_pv, logo_path=logo_path, bg_path=bg_path, bg_jk_format=bg_jk_format)
 
 from auto_creat_mod_spr_db import Manager,read_farc,add_farc_to_Manager
 from pathlib import Path

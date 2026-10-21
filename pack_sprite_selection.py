@@ -49,6 +49,7 @@ def build_sprite_selection_farc(
     *,
     atlas_info: AtlasInfo | None = None,
     resolution_mode: int = 14,  # HDTV1080
+    bg_jk_format: str = "dxt5",
 ) -> str:
     """Build a ``spr_sel_pv<pv>.farc`` archive from three PNG inputs.
 
@@ -61,6 +62,9 @@ def build_sprite_selection_farc(
         atlas_info: Pre-computed AtlasInfo (skips atlas build).
         resolution_mode: Resolution mode (0=QVGA, 14=HDTV1080, etc.).
                          Default is 0 (QVGA).
+        bg_jk_format: Encoding for the merged BG+JK texture. One of the keys
+            in ``atlas_builder.BG_JK_FORMAT_IDS`` (``"dxt5"``, ``"rgb8"``).
+            Only used when ``atlas_info`` is None.
 
     Returns:
         Path to the generated .farc file.
@@ -82,7 +86,11 @@ def build_sprite_selection_farc(
     # --- Build atlas (or use provided) ---
     suffix = f"{pv_str}"
     if atlas_info is None:
-        atlas_info = build_atlas(bg_img, jk_img, logo_img, sprite_name_suffix=suffix)
+        atlas_info = build_atlas(
+            bg_img, jk_img, logo_img,
+            sprite_name_suffix=suffix,
+            bg_jk_format=bg_jk_format,
+        )
 
     # --- Build sprite records ---
     sprites: list[SpriteRecord] = []
@@ -104,6 +112,7 @@ def build_sprite_selection_farc(
             width=atlas_info.atlas_w,
             height=atlas_info.atlas_h,
             payload=atlas_info.payload_0,
+            format=atlas_info.payload_0_format,
         ),
         TextureBlock(
             name=TEXTURE_NAMES[1],

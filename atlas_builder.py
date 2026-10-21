@@ -51,11 +51,20 @@ class AtlasInfo(NamedTuple):
     atlas_h: int                       # texture 0 height
     logo_atlas_w: int                  # texture 1 (LOGO) width
     logo_atlas_h: int                  # texture 1 (LOGO) height
-    payload_0: bytes                   # raw DXT5 payload for texture 0 (BG+JK)
+    payload_0: bytes                   # raw payload for texture 0 (BG+JK)
     payload_1: bytes                   # raw DXT5 payload for texture 1 (LOGO)
     placement: dict                    # name -> AtlasPlacement
     sprite_widths: dict                # name -> int
     sprite_heights: dict               # name -> int
+    payload_0_format: int = 9          # TXP format ID for texture 0 (9=DXT5, 1=RGB8)
+
+
+# Supported encodings for the merged BG+JK atlas (texture 0), mapped to the
+# TXP SubTexture format ID. Extend this dict to add new formats.
+BG_JK_FORMAT_IDS = {
+    "dxt5": 9,   # DXT5 / BC3 (lossy, has alpha)
+    "rgb8": 1,   # RGB8 uncompressed (3 bytes/pixel, no alpha)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +219,9 @@ def build_atlas(
     dds_out_dir: str | None = None,
     vflip: bool = True,
     sprite_name_suffix: str = "",
+    bg_jk_format: str = "dxt5",
 ) -> AtlasInfo:
-    """Build two atlas textures and encode them to DXT5.
+    """Build two atlas textures and encode them.
 
     Args:
         bg_img: 1280x720 BG PNG (RGBA).
@@ -219,6 +229,10 @@ def build_atlas(
         logo_img: LOGO PNG (RGBA), variable size.
         dds_out_dir: Directory for intermediate DDS files.
         vflip: Whether to apply vertical flip during encoding.
+        sprite_name_suffix: Suffix appended to the SONG_* sprite names.
+        bg_jk_format: Encoding for the merged BG+JK atlas (texture 0).
+            One of the keys in ``BG_JK_FORMAT_IDS`` (``"dxt5"``, ``"rgb8"``).
+            The LOGO atlas is always DXT5.
 
     Returns:
         AtlasInfo with payloads and placement data for all three sprites.
@@ -257,18 +271,38 @@ def build_atlas(
     if dds_out_dir is None:
         dds_out_dir = tempfile.mkdtemp(prefix="atlas_")
 
+    # Resolve the BG+JK atlas format (texture 0).
+    bg_jk_key = bg_jk_format.lower()
+    if bg_jk_key not in BG_JK_FORMAT_IDS:
+        raise ValueError(
+            f"Unsupported BG/JK format {bg_jk_format!r}; "
+            f"expected one of {sorted(BG_JK_FORMAT_IDS)}"
+        )
+    bg_jk_fmt_id = BG_JK_FORMAT_IDS[bg_jk_key]
+
     # Encode BG atlas (contains BG + JK)
     bg_png = os.path.join(dds_out_dir, "atlas_bg.png")
     bg_atlas.save(bg_png)
-    bg_dds = _encode_png_to_dds(bg_png, dds_out_dir, vflip=vflip)
 
-    # Encode LOGO atlas
+    if bg_jk_key == "rgb8":
+        # RGB8: raw 3-bytes/pixel, no alpha. Stored vertically flipped
+        # (upside-down) to match the DXT5 storage convention, so that the
+        # parser's crop_from_texture() vertical flip restores upright.
+        bg_w, bg_h = bg_atlas.size
+        bg_payload = bg_atlas.convert("RGB").transpose(
+            Image.Transpose.FLIP_TOP_BOTTOM
+        ).tobytes()
+    else:
+        # DXT5 (BC3) via texconv
+        bg_dds = _encode_png_to_dds(bg_png, dds_out_dir, vflip=vflip)
+        bg_w, bg_h, bg_payload = parse_dds(bg_dds)
+
+    # Encode LOGO atlas (always DXT5)
     logo_png = os.path.join(dds_out_dir, "atlas_logo.png")
     logo_atlas.save(logo_png)
     logo_dds = _encode_png_to_dds(logo_png, dds_out_dir, vflip=vflip)
 
     # --- Parse DDS payloads ---
-    bg_w, bg_h, bg_payload = parse_dds(bg_dds)
     logo_w_actual, logo_h_actual, logo_payload = parse_dds(logo_dds)
 
     # --- Build placement data ---
@@ -308,4 +342,5 @@ def build_atlas(
         placement=placements,
         sprite_widths=sprite_widths,
         sprite_heights=sprite_heights,
+        payload_0_format=bg_jk_fmt_id,
     )

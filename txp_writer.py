@@ -46,7 +46,8 @@ class TextureBlock(NamedTuple):
     name: str
     width: int
     height: int
-    payload: bytes  # raw DXT5/BC3 data (no DDS header)
+    payload: bytes  # raw texture data (no DDS header)
+    format: int = 9  # TXP SubTexture format ID (9=DXT5/BC3, 1=RGB8, 2=RGBA8)
 
 
 class MipTexture(NamedTuple):
@@ -87,7 +88,7 @@ def _serialize_subtexture(st: TextureBlock) -> bytes:
         TXP_SUBTEXTURE_SIG,
         st.width,
         st.height,
-        9,          # format ID 9 = DXT5
+        st.format,  # format ID (9=DXT5/BC3, 1=RGB8, 2=RGBA8)
         0,          # id (always 0)
         len(st.payload),
     )
