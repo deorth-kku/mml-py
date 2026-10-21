@@ -2,12 +2,16 @@
 
 Usage:
     python upgrade_farc_cli.py <src_pv> <dst_pv> [--logo logo.png] [--bg bg.png]
-                              [--bg-jk-format {dxt5,rgb8,rgba8,bc5}]
+                              [--jk jk.png] [--bg-jk-format {dxt5,rgb8,rgba8,bc5}]
+
+If --logo, --bg and --jk are all provided, the source FARC is not unpacked
+(src_pv is only kept for positional-argument stability).
 
 Examples:
     python upgrade_farc_cli.py 874 1874
     python upgrade_farc_cli.py 874 1874 --logo custom_logo.png --bg custom_bg.png
     python upgrade_farc_cli.py 874 1874 --bg-jk-format rgb8
+    python upgrade_farc_cli.py 874 1874 --logo logo.png --bg bg.png --jk jk.png
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('dst_pv', help='Destination PV number (3 or 4 digits).')
     parser.add_argument('--logo', help='PNG file to use as LOGO, overriding the extracted one.')
     parser.add_argument('--bg', help='PNG file to use as BG, overriding the extracted one.')
+    parser.add_argument('--jk', dest='jk', help='PNG file to use as JK, overriding the extracted one.')
     parser.add_argument('--bg-jk-format', default='dxt5',
                         choices=sorted(BG_JK_FORMAT_IDS),
                         help='Encoding for the merged BG+JK texture (default: dxt5). '
@@ -39,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         pv_insert.do_farc_upgrade(
             args.src_pv, args.dst_pv,
-            logo_path=args.logo, bg_path=args.bg,
+            logo_path=args.logo, bg_path=args.bg, jk_path=args.jk,
             bg_jk_format=args.bg_jk_format,
         )
         return 0

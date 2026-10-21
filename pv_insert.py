@@ -125,7 +125,7 @@ def serialize_pv_db(db: dict[str, list[str]], filepath: str) -> None:
                 f.write("\n")
 
 
-def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, bg_jk_format: str = "dxt5") -> str:
+def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, jk_path: str | None = None, bg_jk_format: str = "dxt5") -> str:
     """Upgrade the sprite selection farc archive for the new PV."""
     from upgrade_farc import upgrade_farc as run_upgrade_farc
 
@@ -134,17 +134,23 @@ def upgrade_farc_archive(src_pv: str, dst_pv: str, logo_path: str | None = None,
     os.makedirs(dst_2d_dir, exist_ok=True)
 
     src_farc = os.path.join(src_2d_dir, f"spr_sel_pv{src_pv}.farc")
-    if not os.path.exists(src_farc):
+    # If all three textures are provided, the source FARC is not needed.
+    all_overridden = logo_path is not None and bg_path is not None and jk_path is not None
+    if not all_overridden and not os.path.exists(src_farc):
         print(f"ERROR: farc file not found: {src_farc}")
         sys.exit(1)
 
-    print(f"  Converting: {src_farc}")
+    if all_overridden:
+        print(f"  All LOGO/BG/JK provided - skipping src farc: {src_farc}")
+    else:
+        print(f"  Converting: {src_farc}")
     dst_farc = run_upgrade_farc(
         input_path=src_farc,
         output_dir=dst_2d_dir,
         pv=dst_pv,
         logo_path=logo_path,
         bg_path=bg_path,
+        jk_path=jk_path,
         bg_jk_format=bg_jk_format,
     )
     print(f"  Done: {dst_farc}")
@@ -202,11 +208,11 @@ def copy_pv_assets(src_pv: str, dst_pv: str) -> None:
     print(f"Done: copied 1 ogg + {dsc_count} dsc files.")
 
 
-def do_farc_upgrade(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, bg_jk_format: str = "dxt5") -> None:
+def do_farc_upgrade(src_pv: str, dst_pv: str, logo_path: str | None = None, bg_path: str | None = None, jk_path: str | None = None, bg_jk_format: str = "dxt5") -> None:
     """Upgrade the sprite selection farc archive."""
     print()
     print("--- FARC Upgrade ---")
-    upgrade_farc_archive(src_pv, dst_pv, logo_path=logo_path, bg_path=bg_path, bg_jk_format=bg_jk_format)
+    upgrade_farc_archive(src_pv, dst_pv, logo_path=logo_path, bg_path=bg_path, jk_path=jk_path, bg_jk_format=bg_jk_format)
 
 from auto_creat_mod_spr_db import Manager,read_farc,add_farc_to_Manager
 from pathlib import Path
